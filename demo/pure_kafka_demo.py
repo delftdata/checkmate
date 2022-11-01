@@ -7,8 +7,8 @@ import uvloop
 from universalis.common.stateflow_ingress import IngressTypes
 from universalis.universalis import Universalis
 
-from demo.functions import graph
-from demo.functions.graph import filter_operator
+from functions import graph
+from functions.graph import filter_operator
 
 N_VALUES = 1000
 

@@ -1,8 +1,8 @@
 from universalis.common.local_state_backends import LocalStateBackend
 from universalis.common.stateflow_graph import StateflowGraph
 
-from demo.functions.filter_operator import filter_operator
-from demo.functions.map_operator import map_operator
+from .filter_operator import filter_operator
+from .map_operator import map_operator
 
 ####################################################################################################################
 # DECLARE A STATEFLOW GRAPH ########################################################################################
