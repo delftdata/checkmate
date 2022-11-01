@@ -22,7 +22,7 @@ services:
       - DISCOVERY_HOST=coordinator
       - DISCOVERY_PORT=8888
     env_file:
-      - env/minio.env
+      - env-example/minio.env
 
   minio:
     image: minio/minio:latest
@@ -31,5 +31,5 @@ services:
     volumes:
       - ./minio-volume:/mnt/data
     env_file:
-      - env/minio.env
+      - env-example/minio.env
     command: server /mnt/data
