@@ -1,5 +1,4 @@
-FROM python:3.11-slim
-RUN apt-get update && apt-get install -y git gcc
+FROM python:3.10-slim
 
 RUN groupadd universalis \
     && useradd -m -d /usr/local/universalis -g universalis universalis

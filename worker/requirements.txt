@@ -4,8 +4,7 @@ msgpack==1.0.4
 cloudpickle==2.2.0
 lz4==4.0.2
 pyzmq==24.0.1
-# aiozmq==0.9.0
-git+https://github.com/aio-libs/aiozmq.git@d3dbc7dd7f7f337fcf394985dbc8f492d67adb4b
+aiozmq==0.9.0
 # monitoring service
 # psutil==5.9.2
 # Redis
