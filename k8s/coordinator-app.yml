@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: coordinator-service
+spec:
+  type: ClusterIP
+  selector:
+    app: coordinator
+  ports:
+    - name: tcp-port
+      port: 8888
+      targetPort: 8888
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coordinator-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coordinator
+  template:
+    metadata:
+      labels:
+        app: coordinator
+    spec:
+      containers:
+        - name: coordinator
+          image: kpsarakis/universalis-coordinator:latest
+          imagePullPolicy: Always
+          resources:
+            limits:
+              memory: "1000Mi"
+              cpu: "1"
+            requests:
+              memory: "1000Mi"
+              cpu: "1"
+          ports:
+            - containerPort: 8888
+              protocol: TCP
+          env:
+            - name: KAFKA_URL
+              value: "kafka:9092"

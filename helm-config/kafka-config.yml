@@ -1,0 +1,13 @@
+replicaCount: 3
+externalAccess:
+  enabled: true
+  autoDiscovery:
+    enabled: true
+  service:
+    type: LoadBalancer
+    ports:
+      external: 9094
+serviceAccount:
+  create: true
+rbac:
+  create: true

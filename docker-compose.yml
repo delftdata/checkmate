@@ -1,0 +1,35 @@
+version: "3"
+services:
+
+  coordinator:
+    build:
+      context: .
+      dockerfile: coordinator/coordinator.dockerfile
+    image: dev/universalis-coordinator:latest
+    ports:
+      - "8886:8888"
+    environment:
+      - KAFKA_URL=kafka1:9092
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/worker.dockerfile
+    image: dev/universalis:latest
+    environment:
+      - INGRESS_TYPE=KAFKA
+      - KAFKA_URL=kafka1:9092
+      - DISCOVERY_HOST=coordinator
+      - DISCOVERY_PORT=8888
+    env_file:
+      - env/minio.env
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9001:9000"
+    volumes:
+      - ./minio-volume:/mnt/data
+    env_file:
+      - env/minio.env
+    command: server /mnt/data
