@@ -252,7 +252,7 @@ class Worker:
 
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
-            self.create_task(self.take_snapshot())
+            await self.take_snapshot()
             logging.warning(f"Checkpoint taken at {timer()}")
             await asyncio.sleep(checkpoint_interval)
 
