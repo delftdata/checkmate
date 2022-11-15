@@ -240,6 +240,12 @@ class Worker:
             f'Operator locations: {self.dns}'
         )
 
+    async def uncoordinated_checkpointing(self, checkpoint_interval):
+        while True:
+            self.create_task(self.take_snapshot())
+            logging.warning(f"Checkpoint taken at {timer()}")
+            await asyncio.sleep(checkpoint_interval)
+
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
         await self.start_kafka_egress_producer()
@@ -247,6 +253,7 @@ class Worker:
             f"Worker TCP Server listening at 0.0.0.0:{SERVER_PORT} "
             f"IP:{self.networking.host_name}"
         )
+        self.create_task(self.uncoordinated_checkpointing(5))
         while True:
             resp_adr, data = await self.router.read()
             deserialized_data: dict = self.networking.decode_message(data)

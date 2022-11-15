@@ -29,7 +29,10 @@ services:
     ports:
       - "9001:9000"
     volumes:
-      - ./minio-volume:/mnt/data
+      - minio_volume:/data
     env_file:
       - env-example/minio.env
     command: server /mnt/data
+
+volumes:
+  minio_volume: {}
