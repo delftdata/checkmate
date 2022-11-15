@@ -16,7 +16,7 @@ from universalis.common.local_state_backends import LocalStateBackend
 from universalis.common.logging import logging
 from universalis.common.networking import NetworkingManager
 from universalis.common.operator import Operator
-from universalis.common.serialization import Serializer, msgpack_serialization, compressed_msgpack_serialization
+from universalis.common.serialization import Serializer, msgpack_serialization, compressed_msgpack_serialization, compressed_msgpack_deserialization
 from worker.operator_state.in_memory_state import InMemoryOperatorState
 from worker.operator_state.redis_state import RedisOperatorState
 from worker.operator_state.stateless import Stateless
@@ -108,7 +108,7 @@ class Worker:
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
                 bytes_file: bytes = compressed_msgpack_serialization(self.local_state.data)
-            snapshot_name: str = f"snapshot_{self.id}.bin"
+            snapshot_name: str = f"snapshot_{self.id}_{snap_start}.bin"
             await self.minio_client_async.put_object(
                 bucket_name=SNAPSHOT_BUCKET_NAME,
                 object_name=snapshot_name,
@@ -119,6 +119,16 @@ class Worker:
             logging.warning("Snapshot currently supported only for in-memory operator state")
         snap_end = timer()
         logging.warning(f"Snapshot took: {snap_end - snap_start}")
+
+    async def restore_from_snapshot(self, snapshot_to_restore):
+        state_to_restore = self.minio_client_async.get_object(
+            bucket_name=SNAPSHOT_BUCKET_NAME,
+            object_name=snapshot_to_restore
+        ).data.decode()
+        async with self.snapshot_state_lock:
+            self.local_state.data = compressed_msgpack_deserialization(state_to_restore)
+        logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
+
 
     async def start_kafka_egress_producer(self):
         self.kafka_egress_producer = AIOKafkaProducer(
