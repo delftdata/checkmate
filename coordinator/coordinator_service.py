@@ -30,9 +30,57 @@ class CoordinatorService:
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
 
+    async def restore_from_failure(self):
+        graph = await self.create_recovery_graph()
+
+        # Placeholder graph:
+        graph = {
+            (0,0): [(0,1), (1,0)],
+            (0,1): [(0,2), (1,0)],
+            (0,2): [(0,3), (1,1)],
+            (0,3): [(0,4), (1,2)],
+            (0,4): [(1,3)],
+            (1,0): [(1,1), (0,1)],
+            (1,1): [(1,2), (0,2)],
+            (1,2): [(1,3)],
+            (1,3): [(0,3)],
+
+        }
+
+        # Don't forget to purge messages and checkpoints that happened before root set/intervals.
+
+        return await self.find_recovery_line(graph)
+
+    async def create_recovery_graph(self):
+        # Checkpoints as nodes
+        # Connect all nodes in their order (C1,2 -> C1,3, etc.)
+        # Connect nodes Cx,i with Cy,j if there is a message from Ix,i to Iy,j (interval comes after the checkpoint)
+        # To be able to do the above we need to know from every message between workers the checkpoint before send and before receive
+        return
+    
+    async def find_recovery_line(self, graph):
+        # Create the root set; last checkpoint from every worker
+        root_set = [4, 3]
+
+        root_set_changed = True
+
+        while(root_set_changed):
+            root_set_changed = False
+            for worker in range(len(root_set)):
+                checkpoint = root_set[worker]
+                edges = graph[(worker, checkpoint)]
+                for edge in edges:
+                    if edge[0] != worker and edge[1] < root_set[edge[0]]:
+                        root_set[edge[0]] = edge[1]
+                        root_set_changed = True
+
+        return root_set
+
     async def main(self):
         router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")  # coordinator
         logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT}")
+        root_set = await self.restore_from_failure()
+        logging.warning(f"Calculated root set to be: {root_set}")
         while True:
             resp_adr, data = await router.read()
             deserialized_data: dict = self.networking.decode_message(data)
