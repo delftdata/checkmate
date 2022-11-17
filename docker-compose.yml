@@ -10,6 +10,8 @@ services:
       - "8886:8888"
     environment:
       - KAFKA_URL=kafka1:9092
+    env_file:
+      - env-example/minio.env
 
   worker:
     build:

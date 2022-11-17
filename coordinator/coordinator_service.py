@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import aiozmq
 import uvloop
@@ -7,10 +8,17 @@ import zmq
 from universalis.common.logging import logging
 from universalis.common.networking import NetworkingManager
 from universalis.common.serialization import Serializer
+from minio import Minio
+from miniopy_async import Minio as Minio_async
 
 from coordinator import Coordinator
 
 SERVER_PORT = WORKER_PORT = 8888
+
+MINIO_URL: str = f"{os.environ['MINIO_HOST']}:{os.environ['MINIO_PORT']}"
+MINIO_ACCESS_KEY: str = os.environ['MINIO_ROOT_USER']
+MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
+SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 
 class CoordinatorService:
@@ -21,6 +29,15 @@ class CoordinatorService:
         # background task references
         self.background_tasks = set()
         self.worker_ips: dict[int, str] = {}
+        self.minio_client: Minio = Minio(
+            MINIO_URL, access_key=MINIO_ACCESS_KEY,
+            secret_key=MINIO_SECRET_KEY, secure=False
+        )
+        self.minio_client_async: Minio_async = Minio_async(
+            MINIO_URL, access_key=MINIO_ACCESS_KEY,
+            secret_key=MINIO_SECRET_KEY, secure=False
+        )
+        self.current_snapshots = {}
 
     async def schedule_operators(self, message):
         await self.coordinator.submit_stateflow_graph(self.networking, message)
@@ -76,11 +93,26 @@ class CoordinatorService:
 
         return root_set
 
+    def parse_snapshot_name(self, snapshot_name):
+        elements = snapshot_name.strip(".bin").split("_")
+        logging.warning(elements)
+        self.current_snapshots[elements[1]].append(elements[2])
+
+    async def test_snapshot_recovery(self):
+        await asyncio.sleep(40)
+        logging.warning(self.current_snapshots)
+        list_of_snapshots = list(map(lambda x: x.object_name, self.minio_client.list_objects(SNAPSHOT_BUCKET_NAME)))
+        logging.warning(list_of_snapshots)
+        for name in list_of_snapshots:
+            self.parse_snapshot_name(name)
+        logging.warning(self.current_snapshots)
+
     async def main(self):
         router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")  # coordinator
         logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT}")
-        root_set = await self.restore_from_failure()
-        logging.warning(f"Calculated root set to be: {root_set}")
+        # ADD DIFFERENT LOGIC FOR TESTING STATE RECOVERY
+        # No while loop, but for example a simple sleep and recover message
+        self.create_task(self.test_snapshot_recovery())
         while True:
             resp_adr, data = await router.read()
             deserialized_data: dict = self.networking.decode_message(data)
@@ -100,6 +132,7 @@ class CoordinatorService:
                         self.worker_ips[assigned_id] = message
                         reply = self.networking.encode_message(assigned_id, Serializer.MSGPACK)
                         router.write((resp_adr, reply))
+                        self.current_snapshots[str(assigned_id)] = []
                         logging.info(f"Worker registered {message} with id {reply}")
                     case _:
                         # Any other message type

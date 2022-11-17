@@ -106,25 +106,29 @@ class Worker:
         snap_start = timer()
         if isinstance(self.local_state, InMemoryOperatorState):
             self.local_state: InMemoryOperatorState
+            logging.warning(self.local_state.data)
             async with self.snapshot_state_lock:
                 bytes_file: bytes = compressed_msgpack_serialization(self.local_state.data)
-            snapshot_name: str = f"snapshot_{self.id}_{snap_start}.bin"
+            snapshot_name: str = f"snapshot_{self.id}_{time.time_ns() // 1000000}.bin"
             await self.minio_client_async.put_object(
                 bucket_name=SNAPSHOT_BUCKET_NAME,
                 object_name=snapshot_name,
                 data=io.BytesIO(bytes_file),
                 length=len(bytes_file)
             )
+            await self.restore_from_snapshot(snapshot_name)
+            logging.warning(self.local_state.data)
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
         snap_end = timer()
         logging.warning(f"Snapshot took: {snap_end - snap_start}")
 
     async def restore_from_snapshot(self, snapshot_to_restore):
-        state_to_restore = self.minio_client_async.get_object(
+        state_to_restore = self.minio_client.get_object(
             bucket_name=SNAPSHOT_BUCKET_NAME,
             object_name=snapshot_to_restore
-        ).data.decode()
+        ).data
+        logging.warning(state_to_restore)
         async with self.snapshot_state_lock:
             self.local_state.data = compressed_msgpack_deserialization(state_to_restore)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
@@ -219,6 +223,7 @@ class Worker:
                 # This contains all the operators of a job assigned to this worker
                 await self.handle_execution_plan(message)
                 self.attach_state_to_operators()
+            # ADD CASE FOR TESTING SNAPSHOT RESTORE
             case _:
                 logging.error(f"Worker Service: Non supported command message type: {message_type}")
 
@@ -252,9 +257,9 @@ class Worker:
 
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
+            await asyncio.sleep(checkpoint_interval)
             await self.take_snapshot()
             logging.warning(f"Checkpoint taken at {timer()}")
-            await asyncio.sleep(checkpoint_interval)
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
