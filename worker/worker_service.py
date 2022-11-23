@@ -3,6 +3,7 @@ import io
 import os
 import time
 from timeit import default_timer as timer
+from math import ceil
 
 import aiozmq
 import uvloop
@@ -59,8 +60,8 @@ class Worker:
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY, secure=False
         )
-        self.init_snapshot_minio_bucket()
         self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
+        self.last_snapshot_timestamp = time.time_ns() // 1000000
 
     async def run_function(
             self,
@@ -106,29 +107,27 @@ class Worker:
         snap_start = timer()
         if isinstance(self.local_state, InMemoryOperatorState):
             self.local_state: InMemoryOperatorState
-            logging.warning(self.local_state.data)
             async with self.snapshot_state_lock:
                 bytes_file: bytes = compressed_msgpack_serialization(self.local_state.data)
-            snapshot_name: str = f"snapshot_{self.id}_{time.time_ns() // 1000000}.bin"
+            snapshot_time = time.time_ns() // 1000000
+            snapshot_name: str = f"snapshot_{self.id}_{snapshot_time}.bin"
             await self.minio_client_async.put_object(
                 bucket_name=SNAPSHOT_BUCKET_NAME,
                 object_name=snapshot_name,
                 data=io.BytesIO(bytes_file),
                 length=len(bytes_file)
             )
-            await self.restore_from_snapshot(snapshot_name)
-            logging.warning(self.local_state.data)
+            self.last_snapshot_timestamp = time.time_ns() // 1000000
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
         snap_end = timer()
-        logging.warning(f"Snapshot took: {snap_end - snap_start}")
+        logging.warning(f"Snapshot took: {snap_end - snap_start}, taken at {time.time_ns() // 1000000}")
 
     async def restore_from_snapshot(self, snapshot_to_restore):
         state_to_restore = self.minio_client.get_object(
             bucket_name=SNAPSHOT_BUCKET_NAME,
             object_name=snapshot_to_restore
         ).data
-        logging.warning(state_to_restore)
         async with self.snapshot_state_lock:
             self.local_state.data = compressed_msgpack_deserialization(state_to_restore)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
@@ -219,6 +218,8 @@ class Worker:
                             payload
                         )
                     )
+            case 'RECOVER_FROM_SNAPSHOT':
+                logging.warning(f'Recovery message received: {message}')
             case 'RECEIVE_EXE_PLN':  # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
                 # This contains all the operators of a job assigned to this worker
                 await self.handle_execution_plan(message)
@@ -259,7 +260,16 @@ class Worker:
         while True:
             await asyncio.sleep(checkpoint_interval)
             await self.take_snapshot()
-            logging.warning(f"Checkpoint taken at {timer()}")
+
+    async def communication_induced_checkpointing(self, checkpoint_interval):
+        while True:
+            asyncio.sleep(checkpoint_interval)
+            current_time = time.time_ns // 1000000
+            if current_time > self.last_snapshot_timestamp + checkpoint_interval*1000:
+                await self.take_snapshot()
+            else:
+                asyncio.sleep(ceil((self.last_snapshot_timestamp + checkpoint_interval*1000 - current_time) / 1000))
+            
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
@@ -299,10 +309,6 @@ class Worker:
             Serializer.MSGPACK
         )
         logging.info(f"Worker id: {self.id}")
-
-    def init_snapshot_minio_bucket(self):
-        if not self.minio_client.bucket_exists(SNAPSHOT_BUCKET_NAME):
-            self.minio_client.make_bucket(SNAPSHOT_BUCKET_NAME)
 
     async def main(self):
         await self.register_to_coordinator()

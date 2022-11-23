@@ -7,7 +7,7 @@ import zmq
 
 from universalis.common.logging import logging
 from universalis.common.networking import NetworkingManager
-from universalis.common.serialization import Serializer
+from universalis.common.serialization import Serializer, cloudpickle_deserialization
 from minio import Minio
 from miniopy_async import Minio as Minio_async
 
@@ -37,6 +37,7 @@ class CoordinatorService:
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY, secure=False
         )
+        self.init_snapshot_minio_bucket()
         self.current_snapshots = {}
 
     async def schedule_operators(self, message):
@@ -95,17 +96,37 @@ class CoordinatorService:
 
     def parse_snapshot_name(self, snapshot_name):
         elements = snapshot_name.strip(".bin").split("_")
-        logging.warning(elements)
         self.current_snapshots[elements[1]].append(elements[2])
 
     async def test_snapshot_recovery(self):
         await asyncio.sleep(40)
-        logging.warning(self.current_snapshots)
         list_of_snapshots = list(map(lambda x: x.object_name, self.minio_client.list_objects(SNAPSHOT_BUCKET_NAME)))
-        logging.warning(list_of_snapshots)
         for name in list_of_snapshots:
             self.parse_snapshot_name(name)
-        logging.warning(self.current_snapshots)
+        root_set = await self.get_snapshots_root_set()
+        logging.warning(f"Requesting recovery for root set: {root_set}")
+        for key in root_set.keys():
+            await self.request_recovery_from_checkpoint(key, root_set[key])
+        
+    async def get_snapshots_root_set(self):
+        root_set = {}
+        for key in self.current_snapshots.keys():
+            root_set[key] = max(self.current_snapshots[key])
+        return root_set
+
+    async def request_recovery_from_checkpoint(self, worker_id, snapshot_timestamp):
+        self.id = await self.networking.send_message(
+            self.worker_id_to_host[worker_id], WORKER_PORT,
+            {
+                "__COM_TYPE__": 'RECOVER_FROM_SNAPSHOT',
+                "__MSG__": f"snapshot_{worker_id}_{snapshot_timestamp}.bin"
+            },
+            Serializer.MSGPACK
+        )
+
+    def init_snapshot_minio_bucket(self):
+        if not self.minio_client.bucket_exists(SNAPSHOT_BUCKET_NAME):
+            self.minio_client.make_bucket(SNAPSHOT_BUCKET_NAME)
 
     async def main(self):
         router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")  # coordinator
