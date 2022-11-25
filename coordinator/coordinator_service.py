@@ -20,6 +20,7 @@ class CoordinatorService:
         self.coordinator = Coordinator(WORKER_PORT)
         # background task references
         self.background_tasks = set()
+        self.worker_ips: dict[int, str] = {}
 
     async def schedule_operators(self, message):
         await self.coordinator.submit_stateflow_graph(self.networking, message)
@@ -47,8 +48,9 @@ class CoordinatorService:
                         logging.info(f"Submitted Stateflow Graph to Workers")
                     case 'REGISTER_WORKER':
                         # A worker registered to the coordinator
-                        reply = self.networking.encode_message(self.coordinator.register_worker(message),
-                                                               Serializer.MSGPACK)  # reply = the id given to the worker
+                        assigned_id = self.coordinator.register_worker(message)
+                        self.worker_ips[assigned_id] = message
+                        reply = self.networking.encode_message(assigned_id, Serializer.MSGPACK)
                         router.write((resp_adr, reply))
                         logging.info(f"Worker registered {message} with id {reply}")
                     case _:
