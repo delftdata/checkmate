@@ -116,7 +116,7 @@ class CoordinatorService:
 
     async def request_recovery_from_checkpoint(self, worker_id, snapshot_timestamp):
         self.id = await self.networking.send_message(
-            self.worker_id_to_host[worker_id], WORKER_PORT,
+            self.worker_ips[worker_id], WORKER_PORT,
             {
                 "__COM_TYPE__": 'RECOVER_FROM_SNAPSHOT',
                 "__MSG__": f"snapshot_{worker_id}_{snapshot_timestamp}.bin"
@@ -150,7 +150,7 @@ class CoordinatorService:
                     case 'REGISTER_WORKER':
                         # A worker registered to the coordinator
                         assigned_id = self.coordinator.register_worker(message)
-                        self.worker_ips[assigned_id] = message
+                        self.worker_ips[str(assigned_id)] = message
                         reply = self.networking.encode_message(assigned_id, Serializer.MSGPACK)
                         router.write((resp_adr, reply))
                         self.current_snapshots[str(assigned_id)] = []
