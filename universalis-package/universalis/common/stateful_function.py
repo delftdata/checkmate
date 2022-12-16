@@ -114,7 +114,9 @@ class StatefulFunction(Function):
                                              operator_port,
                                              {"__COM_TYPE__": 'RUN_FUN_REMOTE',
                                               "__MSG__": payload},
-                                             Serializer.MSGPACK)
+                                             Serializer.MSGPACK,
+                                             op_name=self.__operator_name,
+                                             op_key=self.__key)
 
     async def call_remote_function_request_response(self,
                                                     operator_name: str,

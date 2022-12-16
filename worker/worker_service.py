@@ -62,6 +62,7 @@ class Worker:
         )
         self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
         self.last_snapshot_timestamp = time.time_ns() // 1000000
+        self.sent_messages = []
 
     async def run_function(
             self,
@@ -81,6 +82,9 @@ class Worker:
             success = False
         # If request response send the response
         if payload.response_socket is not None:
+            # Log the tcp message in memory
+            # logging.warning(f'payload: {payload.operator_name}')
+            self.sent_messages.append((payload, response))
             self.router.write(
                 (payload.response_socket, self.networking.encode_message(
                     response,
@@ -89,6 +93,7 @@ class Worker:
             )
         # If we have a response, and it's not part of the chain send it to kafka
         elif response is not None:
+            # logging.warning(f'payload: {payload.operator_name}')
             # If Exception transform it to string for Kafka
             if isinstance(response, Exception):
                 kafka_response = str(response)
@@ -104,10 +109,12 @@ class Worker:
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
     async def take_snapshot(self):
+        logging.warning(f'message logs: {self.networking.get_message_logs()}')
         snap_start = timer()
         if isinstance(self.local_state, InMemoryOperatorState):
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
+                # get the sent_messages and send them to kafka
                 bytes_file: bytes = compressed_msgpack_serialization(self.local_state.data)
             snapshot_time = time.time_ns() // 1000000
             snapshot_name: str = f"snapshot_{self.id}_{snapshot_time}.bin"
@@ -178,11 +185,14 @@ class Worker:
             f"{msg.key} {msg.value} {msg.timestamp}"
         )
         deserialized_data: dict = self.networking.decode_message(msg.value)
+        # This data should be added to a replay kafka topic.
         message_type: str = deserialized_data['__COM_TYPE__']
         message = deserialized_data['__MSG__']
+        # logging.warning(f"message key looks like: {msg.key}")
         if message_type == 'RUN_FUN':
             run_func_payload: RunFuncPayload = self.unpack_run_payload(message, msg.key, timestamp=msg.timestamp)
-            logging.info(f'RUNNING FUNCTION  FROM KAFKA: {run_func_payload.function_name} {run_func_payload.key}')
+            logging.info(f'RUNNING FUNCTION FROM KAFKA: {run_func_payload.function_name} {run_func_payload.key}')
+            # logging.warning(f'payload from kafka: {run_func_payload.response_socket}')
             self.create_task(
                 self.run_function(
                     run_func_payload
@@ -222,6 +232,9 @@ class Worker:
                 logging.warning(f'Recovery message received: {message}')
             case 'RECEIVE_EXE_PLN':  # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
                 # This contains all the operators of a job assigned to this worker
+
+                # Message that tells the worker its execution plan from round_robin.schedule
+
                 await self.handle_execution_plan(message)
                 self.attach_state_to_operators()
             # ADD CASE FOR TESTING SNAPSHOT RESTORE
@@ -280,6 +293,7 @@ class Worker:
         )
         self.create_task(self.uncoordinated_checkpointing(5))
         while True:
+            # This is where we read from TCP, log at receiver
             resp_adr, data = await self.router.read()
             deserialized_data: dict = self.networking.decode_message(data)
             if '__COM_TYPE__' not in deserialized_data:

@@ -36,12 +36,13 @@ class Coordinator:
         if not isinstance(stateflow_graph, StateflowGraph):
             raise NotAStateflowGraph
         scheduler = RoundRobin()
+        # Create kafka topic per worker
         if ingress_type == IngressTypes.KAFKA:
-            self.create_kafka_ingress_topics(stateflow_graph)
+            self.create_kafka_ingress_topics(stateflow_graph, self.workers.keys())
         await scheduler.schedule(self.workers, stateflow_graph, network_manager)
 
     @staticmethod
-    def create_kafka_ingress_topics(stateflow_graph: StateflowGraph):
+    def create_kafka_ingress_topics(stateflow_graph: StateflowGraph, workers):
         kafka_url: str = os.getenv('KAFKA_URL', None)
         if kafka_url is None:
             logging.error('Kafka URL not given')
@@ -56,6 +57,8 @@ class Coordinator:
                   for operator in stateflow_graph.nodes.values()] + [NewTopic(name='universalis-egress',
                                                                               num_partitions=1,
                                                                               replication_factor=1)]
+        for worker in workers:
+            topics.append(NewTopic(name=f"message_log_{worker}", num_partitions=1, replication_factor=1))
         try:
             client.create_topics(topics)
         except TopicAlreadyExistsError:

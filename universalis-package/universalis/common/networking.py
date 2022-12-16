@@ -2,13 +2,19 @@ import asyncio
 import dataclasses
 import struct
 import socket
+import time
+import os
 
 import zmq
 from aiozmq import create_zmq_stream, ZmqStream
+from aiokafka import AIOKafkaProducer
+from kafka.errors import KafkaConnectionError
 
 from .logging import logging
 from .serialization import Serializer, msgpack_serialization, msgpack_deserialization, \
     cloudpickle_serialization, cloudpickle_deserialization
+
+KAFKA_URL: str = os.getenv('KAFKA_URL', None)
 
 
 @dataclasses.dataclass
@@ -49,10 +55,39 @@ class SocketPool:
 
 class NetworkingManager:
 
+    kafka_producer: AIOKafkaProducer
+
     def __init__(self):
         self.pools: dict[tuple[str, int], SocketPool] = {}  # HERE BETTER TO ADD A CONNECTION POOL
         self.get_socket_lock = asyncio.Lock()
         self.host_name: str = str(socket.gethostbyname(socket.gethostname()))
+        self.message_logs = []
+
+    async def start_kafka_producer(self):
+        # Set the batch_size and linger_ms to a high number and use manual flushes to commit to kafka.
+        self.kafka_producer = AIOKafkaProducer(bootstrap_servers=[KAFKA_URL],
+                                               enable_idempotence=True,
+                                               batch_size=100000,
+                                               linger_ms=100000,
+                                               acks='all')
+        while True:
+            try:
+                await self.kafka_producer.start()
+            except KafkaConnectionError:
+                time.sleep(1)
+                logging.info("Waiting for Kafka networking producer")
+                continue
+            break
+        logging.info(f'KAFKA PRODUCER STARTED FOR NETWORKING')
+
+    async def stop_kafka_producer(self):
+        await self.kafka_producer.stop()
+
+    def get_message_logs(self):
+        return self.message_logs
+
+    def clear_message_logs(self):
+        self.message_logs = []
 
     def close_all_connections(self):
         for pool in self.pools.values():
@@ -72,11 +107,14 @@ class NetworkingManager:
                            host,
                            port,
                            msg: dict[str, object],
-                           serializer: Serializer = Serializer.CLOUDPICKLE):
+                           serializer: Serializer = Serializer.CLOUDPICKLE,
+                           op_name=None):
         async with self.get_socket_lock:
             if (host, port) not in self.pools:
                 await self.create_socket_connection(host, port)
             socket_conn = next(self.pools[(host, port)])
+        self.message_logs.append(msg)
+        logging.warning(f'operator name: {op_name}')
         msg = self.encode_message(msg, serializer)
         socket_conn.zmq_socket.write((msg, ))
 
