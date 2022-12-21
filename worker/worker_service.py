@@ -51,6 +51,7 @@ class Worker:
         self.local_state: InMemoryOperatorState | RedisOperatorState | Stateless = Stateless()
         # background task references
         self.background_tasks = set()
+        self.last_messages_processed = {}
         # snapshot
         self.minio_client: Minio = Minio(
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
@@ -62,11 +63,11 @@ class Worker:
         )
         self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
         self.last_snapshot_timestamp = time.time_ns() // 1000000
-        self.sent_messages = []
 
     async def run_function(
             self,
-            payload: RunFuncPayload
+            payload: RunFuncPayload,
+            send_from = None
     ) -> bool:
         success: bool = True
         operator_partition = self.registered_operators[(payload.operator_name, payload.partition)]
@@ -82,9 +83,6 @@ class Worker:
             success = False
         # If request response send the response
         if payload.response_socket is not None:
-            # Log the tcp message in memory
-            # logging.warning(f'payload: {payload.operator_name}')
-            self.sent_messages.append((payload, response))
             self.router.write(
                 (payload.response_socket, self.networking.encode_message(
                     response,
@@ -105,17 +103,24 @@ class Worker:
                 key=payload.request_id,
                 value=msgpack_serialization(kafka_response)
             ))
+        if send_from is not None:
+            incoming_channel = send_from['operator_name'] + str(send_from['operator_partition']) + payload.operator_name + str(payload.partition)
+            self.last_messages_processed[incoming_channel] = send_from['kafka_offset']
         return success
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
     async def take_snapshot(self):
-        logging.warning(f'message logs: {self.networking.get_message_logs()}')
         snap_start = timer()
+        # logging.warning(self.last_messages_processed)
         if isinstance(self.local_state, InMemoryOperatorState):
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
-                # get the sent_messages and send them to kafka
-                bytes_file: bytes = compressed_msgpack_serialization(self.local_state.data)
+                # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
+                await self.networking.flush_kafka_buffer()
+                snapshot_data = {}
+                snapshot_data['last_messages_processed'] = self.last_messages_processed
+                snapshot_data['local_state_data'] = self.local_state.data
+                bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
             snapshot_time = time.time_ns() // 1000000
             snapshot_name: str = f"snapshot_{self.id}_{snapshot_time}.bin"
             await self.minio_client_async.put_object(
@@ -125,12 +130,24 @@ class Worker:
                 length=len(bytes_file)
             )
             self.last_snapshot_timestamp = time.time_ns() // 1000000
+            coordinator_info = {}
+            coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
+            coordinator_info['snapshot_name'] = snapshot_name
+            await self.networking.send_message(
+                DISCOVERY_HOST, DISCOVERY_PORT,
+                {
+                    "__COM_TYPE__": 'SNAPSHOT_TAKEN',
+                    "__MSG__": coordinator_info
+                },
+                Serializer.MSGPACK
+            )
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
         snap_end = timer()
         logging.warning(f"Snapshot took: {snap_end - snap_start}, taken at {time.time_ns() // 1000000}")
 
     async def restore_from_snapshot(self, snapshot_to_restore):
+        # This message will change quite a bit with the new coordinator processing.
         state_to_restore = self.minio_client.get_object(
             bucket_name=SNAPSHOT_BUCKET_NAME,
             object_name=snapshot_to_restore
@@ -214,10 +231,11 @@ class Worker:
                 request_id = message['__RQ_ID__']
                 if message_type == 'RUN_FUN_REMOTE':
                     logging.info('CALLED RUN FUN FROM PEER')
+                    sender_details = message['__SENT_FROM__']
                     payload = self.unpack_run_payload(message, request_id)
                     self.create_task(
                         self.run_function(
-                            payload
+                            payload, send_from = sender_details
                         )
                     )
                 else:
@@ -262,6 +280,7 @@ class Worker:
             self.registered_operators[(operator.name, partition)] = operator
             if INGRESS_TYPE == 'KAFKA':
                 self.topic_partitions.append(TopicPartition(operator.name, partition))
+        await self.networking.start_kafka_producer()
         self.create_task(self.start_kafka_consumer(self.topic_partitions))
         logging.info(
             f'Registered operators: {self.registered_operators} \n'

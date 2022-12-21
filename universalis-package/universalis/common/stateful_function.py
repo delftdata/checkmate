@@ -110,13 +110,15 @@ class StatefulFunction(Function):
                                                                                                function_name,
                                                                                                params)
 
+        sender_partition: int = make_key_hashable(self.__key) % len(self.__dns[operator_name].keys())
+
         await self.__networking.send_message(operator_host,
                                              operator_port,
                                              {"__COM_TYPE__": 'RUN_FUN_REMOTE',
                                               "__MSG__": payload},
                                              Serializer.MSGPACK,
-                                             op_name=self.__operator_name,
-                                             op_key=self.__key)
+                                             sending_name=self.__operator_name,
+                                             sending_partition=sender_partition)
 
     async def call_remote_function_request_response(self,
                                                     operator_name: str,

@@ -155,6 +155,8 @@ class CoordinatorService:
                         router.write((resp_adr, reply))
                         self.current_snapshots[str(assigned_id)] = []
                         logging.info(f"Worker registered {message} with id {reply}")
+                    case 'SNAPSHOT_TAKEN':
+                        logging.warning(f'message received: {message}')
                     case _:
                         # Any other message type
                         logging.error(f"COORDINATOR SERVER: Non supported message type: {message_type}")

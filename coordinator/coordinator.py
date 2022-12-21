@@ -53,12 +53,21 @@ class Coordinator:
             except (NoBrokersAvailable, NodeNotReadyError):
                 logging.warning(f'Kafka at {kafka_url} not ready yet, sleeping for 1 second')
                 time.sleep(1)
-        topics = [NewTopic(name=operator.name, num_partitions=operator.n_partitions, replication_factor=1)
-                  for operator in stateflow_graph.nodes.values()] + [NewTopic(name='universalis-egress',
-                                                                              num_partitions=1,
-                                                                              replication_factor=1)]
-        for worker in workers:
-            topics.append(NewTopic(name=f"message_log_{worker}", num_partitions=1, replication_factor=1))
+        partitions_per_operator = {}
+        topics = []
+        for operator in stateflow_graph.nodes.values():
+            partitions_per_operator[operator.name] = operator.n_partitions
+            topics.append(NewTopic(name=operator.name, num_partitions=operator.n_partitions, replication_factor=1))
+        
+        # i*(j+1) + j
+        for key_one in partitions_per_operator.keys():
+            for key_two in partitions_per_operator.keys():
+                if key_one is not key_two:
+                    topic_name = key_one + key_two
+                    topic_partitions = partitions_per_operator[key_one] * partitions_per_operator[key_two]
+                    topics.append(NewTopic(name= topic_name, num_partitions=topic_partitions, replication_factor=1))
+            
+        topics.append(NewTopic(name='universalis-egress', num_partitions=1, replication_factor=1))
         try:
             client.create_topics(topics)
         except TopicAlreadyExistsError:

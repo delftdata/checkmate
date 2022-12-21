@@ -61,14 +61,11 @@ class NetworkingManager:
         self.pools: dict[tuple[str, int], SocketPool] = {}  # HERE BETTER TO ADD A CONNECTION POOL
         self.get_socket_lock = asyncio.Lock()
         self.host_name: str = str(socket.gethostbyname(socket.gethostname()))
-        self.message_logs = []
 
     async def start_kafka_producer(self):
         # Set the batch_size and linger_ms to a high number and use manual flushes to commit to kafka.
         self.kafka_producer = AIOKafkaProducer(bootstrap_servers=[KAFKA_URL],
                                                enable_idempotence=True,
-                                               batch_size=100000,
-                                               linger_ms=100000,
                                                acks='all')
         while True:
             try:
@@ -80,14 +77,11 @@ class NetworkingManager:
             break
         logging.info(f'KAFKA PRODUCER STARTED FOR NETWORKING')
 
+    async def flush_kafka_buffer(self):
+        await self.kafka_producer.flush()
+
     async def stop_kafka_producer(self):
         await self.kafka_producer.stop()
-
-    def get_message_logs(self):
-        return self.message_logs
-
-    def clear_message_logs(self):
-        self.message_logs = []
 
     def close_all_connections(self):
         for pool in self.pools.values():
@@ -108,13 +102,25 @@ class NetworkingManager:
                            port,
                            msg: dict[str, object],
                            serializer: Serializer = Serializer.CLOUDPICKLE,
-                           op_name=None):
+                           sending_name=None,
+                           sending_partition=None):
         async with self.get_socket_lock:
             if (host, port) not in self.pools:
                 await self.create_socket_connection(host, port)
             socket_conn = next(self.pools[(host, port)])
-        self.message_logs.append(msg)
-        logging.warning(f'operator name: {op_name}')
+        sender_details = {
+            'operator_name': sending_name,
+            'operator_partition': sending_partition,
+            'kafka_offset': None
+        }
+        if msg['__COM_TYPE__'] == 'RUN_FUN_REMOTE':
+            msg['__MSG__']['__SENT_FROM__'] = sender_details
+            receiving_name = msg['__MSG__']['__OP_NAME__']
+            receiving_partition = msg['__MSG__']['__PARTITION__']
+            kafka_data = await self.kafka_producer.send_and_wait(sending_name+receiving_name,
+                                                      value=self.encode_message(msg, serializer),
+                                                      partition=sending_partition*(receiving_partition+1) + receiving_partition)
+            msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
         msg = self.encode_message(msg, serializer)
         socket_conn.zmq_socket.write((msg, ))
 
