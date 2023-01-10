@@ -1,5 +1,6 @@
 import asyncio
 import os
+import bisect
 
 import aiozmq
 import uvloop
@@ -41,6 +42,8 @@ class CoordinatorService:
         self.current_snapshots = {}
         self.recovery_graph_root_set = {}
         self.messages_per_snapshot = {}
+        self.recovery_graph = {}
+        self.snapshot_timestamps = {}
 
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
@@ -111,19 +114,25 @@ class CoordinatorService:
     # Processes the information sent from the worker about a snapshot.
     async def process_snapshot_information(self, message):
         snapshot_name = message['snapshot_name'].replace('.bin', '').split('_')
+        # Store the snapshot timestamp in a sorted list
+        bisect.insort(self.snapshot_timestamps[snapshot_name[1]], int(snapshot_name[2]))
         # Store the sent and received message information
-        self.messages_per_snapshot[snapshot_name[1]][snapshot_name[2]] = (message['last_messages_processed'], message['last_messages_sent'])
+        self.messages_per_snapshot[snapshot_name[1]][int(snapshot_name[2])] = (message['last_messages_processed'], message['last_messages_sent'])
         # Update root set
         if self.recovery_graph_root_set[snapshot_name[1]] < int(snapshot_name[2]):
             self.recovery_graph_root_set[snapshot_name[1]] = int(snapshot_name[2])
         # Add to the recovery graph
-        await self.add_to_recovery_graph(message)
+        await self.add_to_recovery_graph(snapshot_name, message['last_messages_processed'], message['last_messages_sent'])
         
-    async def add_to_recovery_graph(self, message):
+    async def add_to_recovery_graph(self, snapshot_name, messages_processed, messages_sent):
         # Recovery graph looks like the following:
         # The nodes (keys) are the (worker_id, snapshot_time)
-        # The edges (values) are lists containing (worker_id, snapshot_time) nodes that the edges go to from the key node
-        
+        # The outgoing edges (values) are lists (sets) containing (worker_id, snapshot_time) nodes
+        self.recovery_graph[(snapshot_name[1], int(snapshot_name[2]))] = []
+        snapshot_number = self.snapshot_timestamps[snapshot_name[1]].index(int(snapshot_name[2]))
+        if snapshot_number > 0:
+            self.recovery_graph[(snapshot_name[1], self.snapshot_timestamps[snapshot_name[1]][snapshot_number-1])].append((snapshot_name[1], snapshot_name[2]))
+        logging.warning(self.recovery_graph)
         return
 
     def init_snapshot_minio_bucket(self):
@@ -157,6 +166,7 @@ class CoordinatorService:
                         router.write((resp_adr, reply))
                         self.recovery_graph_root_set[str(assigned_id)] = 0
                         self.messages_per_snapshot[str(assigned_id)] = {}
+                        self.snapshot_timestamps[str(assigned_id)] = []
                         logging.warning(f"Worker registered {message} with id {reply}")
                     case 'SNAPSHOT_TAKEN':
                         await self.process_snapshot_information(message)
