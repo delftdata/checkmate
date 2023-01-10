@@ -39,9 +39,13 @@ class CoordinatorService:
         )
         self.init_snapshot_minio_bucket()
         self.current_snapshots = {}
+        self.recovery_graph_root_set = {}
+        self.messages_per_snapshot = {}
 
     async def schedule_operators(self, message):
-        await self.coordinator.submit_stateflow_graph(self.networking, message)
+        # Store return value (operators/partitions per workerid)
+        partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message)
+        logging.warning(partitions_to_ids)
 
     def create_task(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -52,6 +56,9 @@ class CoordinatorService:
         graph = await self.create_recovery_graph()
 
         # Placeholder graph:
+        # Graph should look like the following: key = (workerid, snapshot_timestamp),
+        # Value is another dict (or tuple) with the outgoing edges (workerid, snapshot_timestamp)
+        # And the offsets which to replay from for each channel if that snapshot is restored (last messages processed before snapshot).
         graph = {
             (0,0): [(0,1), (1,0)],
             (0,1): [(0,2), (1,0)],
@@ -65,16 +72,10 @@ class CoordinatorService:
 
         }
 
-        # Don't forget to purge messages and checkpoints that happened before root set/intervals.
+        # Don't forget to remove the checkpoints that are taken before the recovery line (purge)
+        # Also, after the recovery line is found, make sure to check from which offset each worker has to replay messages.
 
         return await self.find_recovery_line(graph)
-
-    async def create_recovery_graph(self):
-        # Checkpoints as nodes
-        # Connect all nodes in their order (C1,2 -> C1,3, etc.)
-        # Connect nodes Cx,i with Cy,j if there is a message from Ix,i to Iy,j (interval comes after the checkpoint)
-        # To be able to do the above we need to know from every message between workers the checkpoint before send and before receive
-        return
     
     async def find_recovery_line(self, graph):
         # Create the root set; last checkpoint from every worker
@@ -94,28 +95,11 @@ class CoordinatorService:
 
         return root_set
 
-    def parse_snapshot_name(self, snapshot_name):
-        elements = snapshot_name.strip(".bin").split("_")
-        self.current_snapshots[elements[1]].append(elements[2])
-
     async def test_snapshot_recovery(self):
         await asyncio.sleep(40)
-        list_of_snapshots = list(map(lambda x: x.object_name, self.minio_client.list_objects(SNAPSHOT_BUCKET_NAME)))
-        for name in list_of_snapshots:
-            self.parse_snapshot_name(name)
-        root_set = await self.get_snapshots_root_set()
-        logging.warning(f"Requesting recovery for root set: {root_set}")
-        for key in root_set.keys():
-            await self.request_recovery_from_checkpoint(key, root_set[key])
-        
-    async def get_snapshots_root_set(self):
-        root_set = {}
-        for key in self.current_snapshots.keys():
-            root_set[key] = max(self.current_snapshots[key])
-        return root_set
 
     async def request_recovery_from_checkpoint(self, worker_id, snapshot_timestamp):
-        self.id = await self.networking.send_message(
+        await self.networking.send_message(
             self.worker_ips[worker_id], WORKER_PORT,
             {
                 "__COM_TYPE__": 'RECOVER_FROM_SNAPSHOT',
@@ -123,6 +107,24 @@ class CoordinatorService:
             },
             Serializer.MSGPACK
         )
+
+    # Processes the information sent from the worker about a snapshot.
+    async def process_snapshot_information(self, message):
+        snapshot_name = message['snapshot_name'].replace('.bin', '').split('_')
+        # Store the sent and received message information
+        self.messages_per_snapshot[snapshot_name[1]][snapshot_name[2]] = (message['last_messages_processed'], message['last_messages_sent'])
+        # Update root set
+        if self.recovery_graph_root_set[snapshot_name[1]] < int(snapshot_name[2]):
+            self.recovery_graph_root_set[snapshot_name[1]] = int(snapshot_name[2])
+        # Add to the recovery graph
+        await self.add_to_recovery_graph(message)
+        
+    async def add_to_recovery_graph(self, message):
+        # Recovery graph looks like the following:
+        # The nodes (keys) are the (worker_id, snapshot_time)
+        # The edges (values) are lists containing (worker_id, snapshot_time) nodes that the edges go to from the key node
+        
+        return
 
     def init_snapshot_minio_bucket(self):
         if not self.minio_client.bucket_exists(SNAPSHOT_BUCKET_NAME):
@@ -133,7 +135,7 @@ class CoordinatorService:
         logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT}")
         # ADD DIFFERENT LOGIC FOR TESTING STATE RECOVERY
         # No while loop, but for example a simple sleep and recover message
-        self.create_task(self.test_snapshot_recovery())
+        # self.create_task(self.test_snapshot_recovery())
         while True:
             resp_adr, data = await router.read()
             deserialized_data: dict = self.networking.decode_message(data)
@@ -153,10 +155,11 @@ class CoordinatorService:
                         self.worker_ips[str(assigned_id)] = message
                         reply = self.networking.encode_message(assigned_id, Serializer.MSGPACK)
                         router.write((resp_adr, reply))
-                        self.current_snapshots[str(assigned_id)] = []
-                        logging.info(f"Worker registered {message} with id {reply}")
+                        self.recovery_graph_root_set[str(assigned_id)] = 0
+                        self.messages_per_snapshot[str(assigned_id)] = {}
+                        logging.warning(f"Worker registered {message} with id {reply}")
                     case 'SNAPSHOT_TAKEN':
-                        logging.warning(f'message received: {message}')
+                        await self.process_snapshot_information(message)
                     case _:
                         # Any other message type
                         logging.error(f"COORDINATOR SERVER: Non supported message type: {message_type}")

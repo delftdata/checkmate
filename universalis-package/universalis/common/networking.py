@@ -61,6 +61,8 @@ class NetworkingManager:
         self.pools: dict[tuple[str, int], SocketPool] = {}  # HERE BETTER TO ADD A CONNECTION POOL
         self.get_socket_lock = asyncio.Lock()
         self.host_name: str = str(socket.gethostbyname(socket.gethostname()))
+        self.last_messages_sent = {}
+        self.total_partitions_per_operator = {}
 
     async def start_kafka_producer(self):
         # Set the batch_size and linger_ms to a high number and use manual flushes to commit to kafka.
@@ -78,10 +80,16 @@ class NetworkingManager:
         logging.info(f'KAFKA PRODUCER STARTED FOR NETWORKING')
 
     async def flush_kafka_buffer(self):
+        last_msg_sent = self.last_messages_sent
+        self.last_messages_sent = {}
         await self.kafka_producer.flush()
+        return last_msg_sent
 
     async def stop_kafka_producer(self):
         await self.kafka_producer.stop()
+
+    async def set_total_partitions_per_operator(self, par_per_op):
+        self.total_partitions_per_operator = par_per_op
 
     def close_all_connections(self):
         for pool in self.pools.values():
@@ -119,8 +127,9 @@ class NetworkingManager:
             receiving_partition = msg['__MSG__']['__PARTITION__']
             kafka_data = await self.kafka_producer.send_and_wait(sending_name+receiving_name,
                                                       value=self.encode_message(msg, serializer),
-                                                      partition=sending_partition*(receiving_partition+1) + receiving_partition)
+                                                      partition=sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)
             msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
+            self.last_messages_sent[sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
         msg = self.encode_message(msg, serializer)
         socket_conn.zmq_socket.write((msg, ))
 

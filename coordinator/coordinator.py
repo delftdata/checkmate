@@ -39,7 +39,8 @@ class Coordinator:
         # Create kafka topic per worker
         if ingress_type == IngressTypes.KAFKA:
             self.create_kafka_ingress_topics(stateflow_graph, self.workers.keys())
-        await scheduler.schedule(self.workers, stateflow_graph, network_manager)
+        # Return the following await, should contain operators/partitions per workerid
+        return await scheduler.schedule(self.workers, stateflow_graph, network_manager)
 
     @staticmethod
     def create_kafka_ingress_topics(stateflow_graph: StateflowGraph, workers):

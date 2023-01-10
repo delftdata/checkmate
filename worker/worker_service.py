@@ -63,6 +63,7 @@ class Worker:
         )
         self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
         self.last_snapshot_timestamp = time.time_ns() // 1000000
+        self.total_partitions_per_operator = {}
 
     async def run_function(
             self,
@@ -104,7 +105,7 @@ class Worker:
                 value=msgpack_serialization(kafka_response)
             ))
         if send_from is not None:
-            incoming_channel = send_from['operator_name'] + str(send_from['operator_partition']) + payload.operator_name + str(payload.partition)
+            incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
             self.last_messages_processed[incoming_channel] = send_from['kafka_offset']
         return success
 
@@ -116,9 +117,10 @@ class Worker:
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
-                await self.networking.flush_kafka_buffer()
+                last_messages_sent = await self.networking.flush_kafka_buffer()
                 snapshot_data = {}
                 snapshot_data['last_messages_processed'] = self.last_messages_processed
+                self.last_messages_processed = {}
                 snapshot_data['local_state_data'] = self.local_state.data
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
             snapshot_time = time.time_ns() // 1000000
@@ -132,6 +134,7 @@ class Worker:
             self.last_snapshot_timestamp = time.time_ns() // 1000000
             coordinator_info = {}
             coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
+            coordinator_info['last_messages_sent'] = last_messages_sent
             coordinator_info['snapshot_name'] = snapshot_name
             await self.networking.send_message(
                 DISCOVERY_HOST, DISCOVERY_PORT,
@@ -272,7 +275,8 @@ class Worker:
             operator.attach_state_networking(self.local_state, self.networking, self.dns)
 
     async def handle_execution_plan(self, message):
-        worker_operators, self.dns, self.peers, self.operator_state_backend = message
+        worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator = message
+        await self.networking.set_total_partitions_per_operator(self.total_partitions_per_operator)
         del self.peers[self.id]
         operator: Operator
         for tup in worker_operators:
