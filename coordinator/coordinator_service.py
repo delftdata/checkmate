@@ -81,28 +81,50 @@ class CoordinatorService:
 
         return await self.find_recovery_line(graph)
     
-    async def find_recovery_line(self, graph):
-        # Create the root set; last checkpoint from every worker
-        root_set = [4, 3]
+    async def find_recovery_line(self):
+        marked_nodes = set()
 
         root_set_changed = True
 
         while(root_set_changed):
             root_set_changed = False
-            for worker in range(len(root_set)):
-                checkpoint = root_set[worker]
-                edges = graph[(worker, checkpoint)]
-                for edge in edges:
-                    if edge[0] != worker and edge[1] < root_set[edge[0]]:
-                        root_set[edge[0]] = edge[1]
+            # First iterate to create a set of all reachable nodes in the graph from the root set (mark all reachable nodes)
+            for worker_id in self.recovery_graph_root_set.keys():
+                snapshot_timestamp = self.recovery_graph_root_set[worker_id]
+                marked_nodes = marked_nodes.union(await self.find_reachable_nodes((worker_id, snapshot_timestamp)))
+
+            # If node in the root set is marked, replace it with an earlier checkpoint
+            for worker_id in self.recovery_graph_root_set.keys():
+                snapshot_timestamp = self.recovery_graph_root_set[worker_id]
+                if (worker_id, snapshot_timestamp) in marked_nodes:
+                    index = self.snapshot_timestamps[worker_id].index(snapshot_timestamp) - 1
+                    if index < 0:
+                        logging.error("Even the first snapshot got marked, this should not be possible. Index smaller then zero.")
+                    else:
+                        # Replace it with the checkpoint before the marked one and repeat the process.
+                        self.recovery_graph_root_set[worker_id] = self.snapshot_timestamps[index]
                         root_set_changed = True
 
-        return root_set
+
+    # Recursive method to find all reachable nodes and add them to a set
+    async def find_reachable_nodes(self, node):
+        if len(self.recovery_graph[node]) == 0:
+            return set(node)
+        else:
+            reachable_set = self.recovery_graph[node]
+            for next_node in self.recovery_graph[node]:
+                reachable_set = reachable_set.union(await self.find_reachable_nodes(next_node))
+            return reachable_set
 
     async def test_snapshot_recovery(self):
         await asyncio.sleep(40)
+        await self.add_edges_between_workers()
+        logging.warning(self.recovery_graph)
+        await self.find_recovery_line()
+        logging.warning(f"recovery line should be: {self.recovery_graph_root_set}")
 
     async def request_recovery_from_checkpoint(self, worker_id, snapshot_timestamp):
+        # Needs to be updated to take into account the offsets to replay.
         await self.networking.send_message(
             self.worker_ips[worker_id], WORKER_PORT,
             {
@@ -129,7 +151,53 @@ class CoordinatorService:
             bisect.insort(self.messages_sent_intervals[worker_id][message], (messages_sent[message], int(checkpoint_timestamp)))
 
     async def add_edges_between_workers(self):
-        return
+        for worker_id_rec in self.messages_received_intervals.keys():
+            for worker_id_snt in self.messages_sent_intervals.keys():
+                if worker_id_rec==worker_id_snt:
+                    continue
+                for channel in self.messages_received_intervals[worker_id_rec].keys():
+                    if channel in self.messages_sent_intervals[worker_id_snt].keys():
+                        rec_intervals = self.messages_received_intervals[worker_id_rec][channel]
+                        snt_intervals = self.messages_sent_intervals[worker_id_snt][channel]
+                        rec_index = 1
+                        snt_index = 1
+                        rec_interval_start = rec_intervals[0][0]
+                        snt_interval_start = snt_intervals[0][0]
+                        while rec_index < len(rec_intervals) and snt_index < len(snt_intervals):
+                            rec_interval_end = rec_intervals[rec_index][0]
+                            snt_interval_end = snt_intervals[snt_index][0]
+
+                            # If there is no overlap, increase the lower interval and continue.
+                            if rec_interval_end < snt_interval_start:
+                                rec_interval_start = rec_interval_end
+                                rec_index += 1
+                                continue
+                            elif snt_interval_end < rec_interval_start:
+                                snt_interval_start = snt_interval_end
+                                snt_index += 1
+                                continue
+                            
+                            # If there is overlap in the intervals an edge should be created from the node at the beginning of the sent interval
+                            # To the node at the end of the received interval.
+                            self.recovery_graph[(worker_id_snt, snt_intervals[snt_index-1][1])].add((worker_id_rec, rec_intervals[rec_index][1]))
+
+                            # Increase the lowest interval end
+                            if rec_interval_end < snt_interval_end:
+                                rec_interval_start = rec_interval_end
+                                rec_index += 1
+                            elif rec_interval_end == snt_interval_end:
+                                rec_interval_start = rec_interval_end
+                                snt_interval_start = snt_interval_end
+                                rec_index += 1
+                                snt_index += 1
+                            else:
+                                snt_interval_start = snt_interval_end
+                                snt_index += 1
+                        
+                        # Now arrived at the last node, meaning that if the received is bigger than the sent, there are orphan messages.
+                        # This means that an edge should be added from the last sent to the last received.
+                        if rec_intervals[len(rec_intervals) - 1][0] > snt_intervals[len(snt_intervals) - 1][0]:
+                            self.recovery_graph[(worker_id_snt, snt_intervals[len(snt_intervals) - 1][1])].add((worker_id_rec, rec_intervals[len(rec_intervals) - 1][1]))
 
     # Processes the information sent from the worker about a snapshot.
     async def process_snapshot_information(self, message):
@@ -149,11 +217,11 @@ class CoordinatorService:
         # Recovery graph looks like the following:
         # The nodes (keys) are the (worker_id, snapshot_time)
         # The outgoing edges (values) are lists (sets) containing (worker_id, snapshot_time) nodes
-        self.recovery_graph[(snapshot_name[1], int(snapshot_name[2]))] = []
+        self.recovery_graph[(snapshot_name[1], int(snapshot_name[2]))] = set()
         snapshot_number = self.snapshot_timestamps[snapshot_name[1]].index(int(snapshot_name[2]))
         if snapshot_number > 0:
             # Look up the previous snapshot timestamp and add an edge from that snapshot to the one we are currently processing.
-            self.recovery_graph[(snapshot_name[1], self.snapshot_timestamps[snapshot_name[1]][snapshot_number-1])].append((snapshot_name[1], snapshot_name[2]))
+            self.recovery_graph[(snapshot_name[1], self.snapshot_timestamps[snapshot_name[1]][snapshot_number-1])].add((snapshot_name[1], snapshot_name[2]))
 
     def init_snapshot_minio_bucket(self):
         if not self.minio_client.bucket_exists(SNAPSHOT_BUCKET_NAME):
@@ -164,7 +232,7 @@ class CoordinatorService:
         logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT}")
         # ADD DIFFERENT LOGIC FOR TESTING STATE RECOVERY
         # No while loop, but for example a simple sleep and recover message
-        # self.create_task(self.test_snapshot_recovery())
+        self.create_task(self.test_snapshot_recovery())
         while True:
             resp_adr, data = await router.read()
             deserialized_data: dict = self.networking.decode_message(data)
