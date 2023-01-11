@@ -41,7 +41,8 @@ class CoordinatorService:
         self.init_snapshot_minio_bucket()
         self.current_snapshots = {}
         self.recovery_graph_root_set = {}
-        self.messages_per_snapshot = {}
+        self.messages_received_intervals = {}
+        self.messages_sent_intervals = {}
         self.recovery_graph = {}
         self.snapshot_timestamps = {}
 
@@ -111,29 +112,48 @@ class CoordinatorService:
             Serializer.MSGPACK
         )
 
+    async def store_messages(self, msg):
+        # Decided to map the interval logs per workerid, since we are looking for edges between workers.
+        _, worker_id, checkpoint_timestamp = msg['snapshot_name'].replace('.bin', '').split('_')
+        messages_received = msg['last_messages_processed']
+        messages_sent = msg['last_messages_sent']
+        # We create an ordered list based on (offset, snapshot_timestamp) tuples, such that we have an ordered interval list
+        # This enables us to easily check between which two snapshot timestamps a message was sent/received, so that we can add the edges to the right nodes
+        for message in messages_received.keys():
+            if message not in self.messages_received_intervals[worker_id].keys():
+                self.messages_received_intervals[worker_id][message] = []
+            bisect.insort(self.messages_received_intervals[worker_id][message], (messages_received[message], int(checkpoint_timestamp)))
+        for message in messages_sent.keys():
+            if message not in self.messages_sent_intervals[worker_id].keys():
+                self.messages_sent_intervals[worker_id][message] = []
+            bisect.insort(self.messages_sent_intervals[worker_id][message], (messages_sent[message], int(checkpoint_timestamp)))
+
+    async def add_edges_between_workers(self):
+        return
+
     # Processes the information sent from the worker about a snapshot.
     async def process_snapshot_information(self, message):
         snapshot_name = message['snapshot_name'].replace('.bin', '').split('_')
         # Store the snapshot timestamp in a sorted list
         bisect.insort(self.snapshot_timestamps[snapshot_name[1]], int(snapshot_name[2]))
         # Store the sent and received message information
-        self.messages_per_snapshot[snapshot_name[1]][int(snapshot_name[2])] = (message['last_messages_processed'], message['last_messages_sent'])
+        # This will be used later to add the edges between workers
+        await self.store_messages(message)
         # Update root set
         if self.recovery_graph_root_set[snapshot_name[1]] < int(snapshot_name[2]):
             self.recovery_graph_root_set[snapshot_name[1]] = int(snapshot_name[2])
-        # Add to the recovery graph
-        await self.add_to_recovery_graph(snapshot_name, message['last_messages_processed'], message['last_messages_sent'])
+        # Add nodes and edges within a process to the recovery graph
+        await self.add_to_recovery_graph(snapshot_name)
         
-    async def add_to_recovery_graph(self, snapshot_name, messages_processed, messages_sent):
+    async def add_to_recovery_graph(self, snapshot_name):
         # Recovery graph looks like the following:
         # The nodes (keys) are the (worker_id, snapshot_time)
         # The outgoing edges (values) are lists (sets) containing (worker_id, snapshot_time) nodes
         self.recovery_graph[(snapshot_name[1], int(snapshot_name[2]))] = []
         snapshot_number = self.snapshot_timestamps[snapshot_name[1]].index(int(snapshot_name[2]))
         if snapshot_number > 0:
+            # Look up the previous snapshot timestamp and add an edge from that snapshot to the one we are currently processing.
             self.recovery_graph[(snapshot_name[1], self.snapshot_timestamps[snapshot_name[1]][snapshot_number-1])].append((snapshot_name[1], snapshot_name[2]))
-        logging.warning(self.recovery_graph)
-        return
 
     def init_snapshot_minio_bucket(self):
         if not self.minio_client.bucket_exists(SNAPSHOT_BUCKET_NAME):
@@ -165,8 +185,9 @@ class CoordinatorService:
                         reply = self.networking.encode_message(assigned_id, Serializer.MSGPACK)
                         router.write((resp_adr, reply))
                         self.recovery_graph_root_set[str(assigned_id)] = 0
-                        self.messages_per_snapshot[str(assigned_id)] = {}
                         self.snapshot_timestamps[str(assigned_id)] = []
+                        self.messages_received_intervals[str(assigned_id)] = {}
+                        self.messages_sent_intervals[str(assigned_id)] = {}
                         logging.warning(f"Worker registered {message} with id {reply}")
                     case 'SNAPSHOT_TAKEN':
                         await self.process_snapshot_information(message)
