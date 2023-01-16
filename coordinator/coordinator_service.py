@@ -1,6 +1,7 @@
 import asyncio
 import os
 import bisect
+import math
 
 import aiozmq
 import uvloop
@@ -38,6 +39,7 @@ class CoordinatorService:
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY, secure=False
         )
+        self.partitions_to_ids = {}
         self.init_snapshot_minio_bucket()
         self.current_snapshots = {}
         self.recovery_graph_root_set = {}
@@ -45,41 +47,17 @@ class CoordinatorService:
         self.messages_sent_intervals = {}
         self.recovery_graph = {}
         self.snapshot_timestamps = {}
+        self.messages_to_replay = {}
 
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
-        partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message)
-        logging.warning(partitions_to_ids)
+        self.partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message)
+        logging.warning(self.partitions_to_ids)
 
     def create_task(self, coroutine):
         task = asyncio.create_task(coroutine)
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
-
-    async def restore_from_failure(self):
-        graph = await self.create_recovery_graph()
-
-        # Placeholder graph:
-        # Graph should look like the following: key = (workerid, snapshot_timestamp),
-        # Value is another dict (or tuple) with the outgoing edges (workerid, snapshot_timestamp)
-        # And the offsets which to replay from for each channel if that snapshot is restored (last messages processed before snapshot).
-        graph = {
-            (0,0): [(0,1), (1,0)],
-            (0,1): [(0,2), (1,0)],
-            (0,2): [(0,3), (1,1)],
-            (0,3): [(0,4), (1,2)],
-            (0,4): [(1,3)],
-            (1,0): [(1,1), (0,1)],
-            (1,1): [(1,2), (0,2)],
-            (1,2): [(1,3)],
-            (1,3): [(0,3)],
-
-        }
-
-        # Don't forget to remove the checkpoints that are taken before the recovery line (purge)
-        # Also, after the recovery line is found, make sure to check from which offset each worker has to replay messages.
-
-        return await self.find_recovery_line(graph)
     
     async def find_recovery_line(self):
         marked_nodes = set()
@@ -115,6 +93,29 @@ class CoordinatorService:
             for next_node in self.recovery_graph[node]:
                 reachable_set = reachable_set.union(await self.find_reachable_nodes(next_node))
             return reachable_set
+    
+    async def send_restore_message(self):
+        # First build a dict that contains for every worker the snapshot timestamp + offsets to replay based on the recovery line
+        to_recover = {}
+        for worker_id in self.recovery_graph_root_set.keys():
+            # Initiate a corresponding tuple for every worker_id, tuple contains (snapshot_timestamp, {channel: offset})
+            to_recover[worker_id] = (self.recovery_graph_root_set[worker_id], {})
+        for worker_id in self.recovery_graph_root_set.keys():
+            to_replay_for_snapshot = self.messages_to_replay[worker_id][self.recovery_graph_root_set[worker_id]]
+            for channel in to_replay_for_snapshot.keys():
+                # Split the channel string for its components (example: map_filter_27)
+                snt_op, rec_op, channel_no = channel.split('_')
+                # Divide the channel number by the amount of partitions of the receiving operator (in the example case: 27 / no_partitions(filter) )
+                snt_op_partition = math.floor(int(channel_no) / len(self.partitions_to_ids[rec_op].keys()))
+                # We now have the partition of the sending operator (example: map), so we can look up which worker_id hosts this partition
+                worker_id_to_replay = self.partitions_to_ids[snt_op][str(snt_op_partition)]
+                # The hosting worker_id should replay the channel in question from the last offset received for this checkpoint
+                # In case of our example: the worker that hosts the calculated map partition should replay messages sent on channel map_filter_27 from corresponding offset.
+                to_recover[worker_id_to_replay][1][channel] = to_replay_for_snapshot[channel]
+        for worker_id in to_recover.keys():
+            # Now we have to send a message to every worker containing the tuple we just created.
+            # The worker can then restore the snapshot with the corresponding timestamp and replay its outgoing channels from the given offsets.
+            await self.request_recovery_from_checkpoint(worker_id, to_recover[worker_id])
 
     async def test_snapshot_recovery(self):
         await asyncio.sleep(40)
@@ -122,14 +123,14 @@ class CoordinatorService:
         logging.warning(self.recovery_graph)
         await self.find_recovery_line()
         logging.warning(f"recovery line should be: {self.recovery_graph_root_set}")
+        await self.send_restore_message()
 
-    async def request_recovery_from_checkpoint(self, worker_id, snapshot_timestamp):
-        # Needs to be updated to take into account the offsets to replay.
+    async def request_recovery_from_checkpoint(self, worker_id, restore_point):
         await self.networking.send_message(
             self.worker_ips[worker_id], WORKER_PORT,
             {
                 "__COM_TYPE__": 'RECOVER_FROM_SNAPSHOT',
-                "__MSG__": f"snapshot_{worker_id}_{snapshot_timestamp}.bin"
+                "__MSG__": restore_point
             },
             Serializer.MSGPACK
         )
@@ -139,6 +140,8 @@ class CoordinatorService:
         _, worker_id, checkpoint_timestamp = msg['snapshot_name'].replace('.bin', '').split('_')
         messages_received = msg['last_messages_processed']
         messages_sent = msg['last_messages_sent']
+        self.messages_to_replay[worker_id][int(checkpoint_timestamp)] = messages_received
+        logging.warning(messages_received)
         # We create an ordered list based on (offset, snapshot_timestamp) tuples, such that we have an ordered interval list
         # This enables us to easily check between which two snapshot timestamps a message was sent/received, so that we can add the edges to the right nodes
         for message in messages_received.keys():
@@ -256,6 +259,7 @@ class CoordinatorService:
                         self.snapshot_timestamps[str(assigned_id)] = []
                         self.messages_received_intervals[str(assigned_id)] = {}
                         self.messages_sent_intervals[str(assigned_id)] = {}
+                        self.messages_to_replay[str(assigned_id)] = {}
                         logging.warning(f"Worker registered {message} with id {reply}")
                     case 'SNAPSHOT_TAKEN':
                         await self.process_snapshot_information(message)
