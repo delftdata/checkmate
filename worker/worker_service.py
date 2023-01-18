@@ -150,7 +150,7 @@ class Worker:
         logging.warning(f"Snapshot took: {snap_end - snap_start}, taken at {time.time_ns() // 1000000}")
 
     async def restore_from_snapshot(self, snapshot_to_restore):
-        # This message will change quite a bit with the new coordinator processing.
+        # Add a special case for snapshot_to_restore = 0, which means complete reset.
         state_to_restore = self.minio_client.get_object(
             bucket_name=SNAPSHOT_BUCKET_NAME,
             object_name=snapshot_to_restore
@@ -198,6 +198,11 @@ class Worker:
                             self.handle_message_from_kafka(message)
         finally:
             await consumer.stop()
+
+    async def replay_from_kafka(self, channel, offset):
+        # Create a kafka consumer for the given channel and seek the given offset.
+        # For every kafka message, send over TCP without logging the message sent.
+        return
 
     def handle_message_from_kafka(self, msg):
         logging.info(
@@ -251,6 +256,12 @@ class Worker:
                     )
             case 'RECOVER_FROM_SNAPSHOT':
                 logging.warning(f'Recovery message received: {message}')
+                # Build the snapshot name from the recovery message received
+                snapshot_to_restore = f'snapshot_{self.id}_{message[0]}.bin'
+                await self.restore_from_snapshot(snapshot_to_restore)
+                # Replay channels from corresponding offsets in message[1]
+                for channel in message[1].keys():
+                    await self.replay_from_kafka(channel, message[1][channel])
             case 'RECEIVE_EXE_PLN':  # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
                 # This contains all the operators of a job assigned to this worker
 

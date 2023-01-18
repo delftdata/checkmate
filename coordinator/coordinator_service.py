@@ -52,6 +52,15 @@ class CoordinatorService:
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
         self.partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message)
+        # For every channel, initialize a last_received to zero, to make sure checkpoints are replayed from offset 0.
+        for operator_one in self.partitions_to_ids.keys():
+            for operator_two in self.partitions_to_ids.keys():
+                if operator_one == operator_two:
+                    continue
+                for partition_one in self.partitions_to_ids[operator_one].keys():
+                    for partition_two in self.partitions_to_ids[operator_two].keys():
+                        channel_name = f'{operator_one}_{operator_two}_{int(partition_one) * len(self.partitions_to_ids[operator_two].keys()) + int(partition_two)}'
+                        self.messages_received_intervals[str(self.partitions_to_ids[operator_two][partition_two])][channel_name] = [(0,0)]
         logging.warning(self.partitions_to_ids)
 
     def create_task(self, coroutine):
@@ -256,7 +265,8 @@ class CoordinatorService:
                         reply = self.networking.encode_message(assigned_id, Serializer.MSGPACK)
                         router.write((resp_adr, reply))
                         self.recovery_graph_root_set[str(assigned_id)] = 0
-                        self.snapshot_timestamps[str(assigned_id)] = []
+                        self.snapshot_timestamps[str(assigned_id)] = [0]
+                        self.recovery_graph[(str(assigned_id), 0)] = set()
                         self.messages_received_intervals[str(assigned_id)] = {}
                         self.messages_sent_intervals[str(assigned_id)] = {}
                         self.messages_to_replay[str(assigned_id)] = {}
