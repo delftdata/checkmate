@@ -150,13 +150,17 @@ class Worker:
         logging.warning(f"Snapshot took: {snap_end - snap_start}, taken at {time.time_ns() // 1000000}")
 
     async def restore_from_snapshot(self, snapshot_to_restore):
-        # Add a special case for snapshot_to_restore = 0, which means complete reset.
-        state_to_restore = self.minio_client.get_object(
-            bucket_name=SNAPSHOT_BUCKET_NAME,
-            object_name=snapshot_to_restore
-        ).data
-        async with self.snapshot_state_lock:
-            self.local_state.data = compressed_msgpack_deserialization(state_to_restore)
+        # If timestamp is zero, it means reset from the beginning
+        # Therefore we reset the local state to an empty dict
+        if snapshot_to_restore == 0:
+            self.local_state.data = {}
+        else:
+            state_to_restore = self.minio_client.get_object(
+                bucket_name=SNAPSHOT_BUCKET_NAME,
+                object_name=snapshot_to_restore
+            ).data
+            async with self.snapshot_state_lock:
+                self.local_state.data = compressed_msgpack_deserialization(state_to_restore)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
 
