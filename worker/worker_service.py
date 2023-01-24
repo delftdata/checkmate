@@ -204,9 +204,37 @@ class Worker:
             await consumer.stop()
 
     async def replay_from_kafka(self, channel, offset):
+        sent_op, rec_op, partition = channel.split('_')
         # Create a kafka consumer for the given channel and seek the given offset.
         # For every kafka message, send over TCP without logging the message sent.
-        return
+        consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
+        topic_partition = TopicPartition(sent_op+rec_op, int(partition))
+        consumer.assign([topic_partition])
+        while True:
+            # start the kafka consumer
+            try:
+                consumer.seek(topic_partition, offset)
+                await consumer.start()
+            except (UnknownTopicOrPartitionError, KafkaConnectionError):
+                time.sleep(1)
+                logging.warning(f'Kafka at {KAFKA_URL} not ready yet, sleeping for 1 second')
+                continue
+            break
+        try:
+            # Consume messages
+            while True:
+                result = await consumer.getmany(timeout_ms=1)
+                for _, messages in result.items():
+                    if messages:
+                        for message in messages:
+                            await self.replay_log_message(message)
+        finally:
+            await consumer.stop()        
+
+    async def replay_log_message(self, msg):
+        deserialized_data: dict = self.networking.decode_message(msg.value)
+        receiver_info = deserialized_data['__MSG__']['__SENT_TO__']
+        await self.networking.replay_message(receiver_info['host'], receiver_info['port'], msg)
 
     def handle_message_from_kafka(self, msg):
         logging.info(

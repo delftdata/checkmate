@@ -121,8 +121,13 @@ class NetworkingManager:
             'operator_partition': sending_partition,
             'kafka_offset': None
         }
+        receiver_details = {
+            'host': host,
+            'port': port
+        }
         if msg['__COM_TYPE__'] == 'RUN_FUN_REMOTE':
             msg['__MSG__']['__SENT_FROM__'] = sender_details
+            msg['__MSG__']['__SENT_TO__'] = receiver_details
             receiving_name = msg['__MSG__']['__OP_NAME__']
             receiving_partition = msg['__MSG__']['__PARTITION__']
             kafka_data = await self.kafka_producer.send_and_wait(sending_name+receiving_name,
@@ -130,6 +135,19 @@ class NetworkingManager:
                                                       partition=sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)
             msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
             self.last_messages_sent[sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
+        msg = self.encode_message(msg, serializer)
+        socket_conn.zmq_socket.write((msg, ))
+
+    async def replay_message(self,
+                             host,
+                             port,
+                             msg,
+                             serializer: Serializer = Serializer.CLOUDPICKLE):
+        # Replays a message without logging anything
+        async with self.get_socket_lock:
+            if (host, port) not in self.pools:
+                await self.create_socket_connection(host, port)
+            socket_conn = next(self.pools[(host, port)])
         msg = self.encode_message(msg, serializer)
         socket_conn.zmq_socket.write((msg, ))
 
