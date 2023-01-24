@@ -133,6 +133,40 @@ class CoordinatorService:
         await self.find_recovery_line()
         logging.warning(f"recovery line should be: {self.recovery_graph_root_set}")
         await self.send_restore_message()
+        await self.clear_checkpoint_details()
+
+    async def clear_checkpoint_details(self):
+        # Removes all the checkpoint information that is no longer necessary after the recovery line has been found
+        root_set = self.recovery_graph_root_set
+        new_recovery_graph = {}
+        new_messages_to_replay = {}
+        new_messages_received_intervals = {}
+        new_messages_sent_intervals = {}
+        for worker_id in root_set.keys():
+            # Build new recovery graph containing only root set
+            new_recovery_graph[(worker_id, root_set[worker_id])] = set()
+            # Set for every worker_id a new list of timestamps containing only the root set timestamp
+            self.snapshot_timestamps[worker_id] = [root_set[worker_id]]
+            # Keep only the messages to replay for the root set
+            new_messages_to_replay[worker_id] = {root_set[worker_id]: self.messages_to_replay[worker_id][root_set[worker_id]]}
+            # Remove all unnecessary info from the received and sent intervals
+            new_messages_received_intervals[worker_id] = {}
+            new_messages_sent_intervals[worker_id] = {}
+            for channel in self.messages_received_intervals[worker_id].keys():
+                new_messages_received_intervals[worker_id][channel] = []
+                for offset_and_timestamp in self.messages_received_intervals[worker_id][channel]:
+                    if offset_and_timestamp[1] == root_set[worker_id]:
+                        new_messages_received_intervals[worker_id][channel].append(offset_and_timestamp)
+            for channel in self.messages_sent_intervals[worker_id].keys():
+                new_messages_sent_intervals[worker_id][channel] = []
+                for offset_and_timestamp in self.messages_sent_intervals[worker_id][channel]:
+                    if offset_and_timestamp[1] == root_set[worker_id]:
+                        new_messages_sent_intervals[worker_id][channel].append(offset_and_timestamp)
+        # Set the new recovery graph and messages to replay
+        self.recovery_graph = new_recovery_graph
+        self.messages_to_replay = new_messages_to_replay
+        self.messages_received_intervals = new_messages_received_intervals
+        self.messages_sent_intervals = new_messages_sent_intervals
 
     async def request_recovery_from_checkpoint(self, worker_id, restore_point):
         await self.networking.send_message(
