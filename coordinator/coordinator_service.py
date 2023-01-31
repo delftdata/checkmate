@@ -120,14 +120,13 @@ class CoordinatorService:
                 worker_id_to_replay = self.partitions_to_ids[snt_op][str(snt_op_partition)]
                 # The hosting worker_id should replay the channel in question from the last offset received for this checkpoint
                 # In case of our example: the worker that hosts the calculated map partition should replay messages sent on channel map_filter_27 from corresponding offset.
-                to_recover[worker_id_to_replay][1][channel] = to_replay_for_snapshot[channel]
+                to_recover[str(worker_id_to_replay)][1][channel] = to_replay_for_snapshot[channel]
         for worker_id in to_recover.keys():
             # Now we have to send a message to every worker containing the tuple we just created.
             # The worker can then restore the snapshot with the corresponding timestamp and replay its outgoing channels from the given offsets.
             await self.request_recovery_from_checkpoint(worker_id, to_recover[worker_id])
 
     async def test_snapshot_recovery(self):
-        await asyncio.sleep(40)
         await self.add_edges_between_workers()
         logging.warning(self.recovery_graph)
         await self.find_recovery_line()
@@ -278,7 +277,7 @@ class CoordinatorService:
         logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT}")
         # ADD DIFFERENT LOGIC FOR TESTING STATE RECOVERY
         # No while loop, but for example a simple sleep and recover message
-        self.create_task(self.test_snapshot_recovery())
+        # self.create_task(self.test_snapshot_recovery())
         while True:
             resp_adr, data = await router.read()
             deserialized_data: dict = self.networking.decode_message(data)
@@ -307,6 +306,9 @@ class CoordinatorService:
                         logging.warning(f"Worker registered {message} with id {reply}")
                     case 'SNAPSHOT_TAKEN':
                         await self.process_snapshot_information(message)
+                    case 'WORKER_FAILED':
+                        logging.warning('Worker failed! Find recovery line.')
+                        await self.test_snapshot_recovery()
                     case _:
                         # Any other message type
                         logging.error(f"COORDINATOR SERVER: Non supported message type: {message_type}")

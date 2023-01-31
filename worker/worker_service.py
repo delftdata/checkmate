@@ -213,8 +213,8 @@ class Worker:
         while True:
             # start the kafka consumer
             try:
-                consumer.seek(topic_partition, offset)
                 await consumer.start()
+                consumer.seek(topic_partition, offset)
             except (UnknownTopicOrPartitionError, KafkaConnectionError):
                 time.sleep(1)
                 logging.warning(f'Kafka at {KAFKA_URL} not ready yet, sleeping for 1 second')
@@ -235,6 +235,18 @@ class Worker:
         deserialized_data: dict = self.networking.decode_message(msg.value)
         receiver_info = deserialized_data['__MSG__']['__SENT_TO__']
         await self.networking.replay_message(receiver_info['host'], receiver_info['port'], msg)
+
+    async def simple_failure(self):
+        await asyncio.sleep(40)
+        if self.id == 1:
+            await self.networking.send_message(
+                DISCOVERY_HOST, DISCOVERY_PORT,
+                {
+                    "__COM_TYPE__": 'WORKER_FAILED',
+                    "__MSG__": self.id
+                },
+                Serializer.MSGPACK
+            )
 
     def handle_message_from_kafka(self, msg):
         logging.info(
@@ -391,6 +403,7 @@ class Worker:
         logging.info(f"Worker id: {self.id}")
 
     async def main(self):
+        self.create_task(self.simple_failure())
         await self.register_to_coordinator()
         await self.start_tcp_service()
 

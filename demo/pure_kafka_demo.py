@@ -10,7 +10,7 @@ from universalis.universalis import Universalis
 from functions import graph
 from functions.graph import filter_operator
 
-N_VALUES = 1000
+N_VALUES = 100000
 
 
 UNIVERSALIS_HOST: str = 'localhost'
