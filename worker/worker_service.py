@@ -92,7 +92,6 @@ class Worker:
             )
         # If we have a response, and it's not part of the chain send it to kafka
         elif response is not None:
-            # logging.warning(f'payload: {payload.operator_name}')
             # If Exception transform it to string for Kafka
             if isinstance(response, Exception):
                 kafka_response = str(response)
@@ -111,8 +110,6 @@ class Worker:
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
     async def take_snapshot(self):
-        snap_start = timer()
-        # logging.warning(self.last_messages_processed)
         if isinstance(self.local_state, InMemoryOperatorState):
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
@@ -146,21 +143,16 @@ class Worker:
             )
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
-        snap_end = timer()
-        logging.warning(f"Snapshot took: {snap_end - snap_start}, taken at {time.time_ns() // 1000000}")
 
     async def restore_from_snapshot(self, snapshot_to_restore):
-        # If timestamp is zero, it means reset from the beginning
-        # Therefore we reset the local state to an empty dict
-        if snapshot_to_restore == 0:
-            self.local_state.data = {}
-        else:
-            state_to_restore = self.minio_client.get_object(
-                bucket_name=SNAPSHOT_BUCKET_NAME,
-                object_name=snapshot_to_restore
-            ).data
-            async with self.snapshot_state_lock:
-                self.local_state.data = compressed_msgpack_deserialization(state_to_restore)
+        state_to_restore = self.minio_client.get_object(
+            bucket_name=SNAPSHOT_BUCKET_NAME,
+            object_name=snapshot_to_restore
+        ).data
+        async with self.snapshot_state_lock:
+            deserialized_data = compressed_msgpack_deserialization(state_to_restore)
+            self.local_state.data = deserialized_data['local_state_data']
+            self.last_messages_processed = deserialized_data['last_messages_processed']
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
 
@@ -198,6 +190,7 @@ class Worker:
                 result = await consumer.getmany(timeout_ms=1)
                 for _, messages in result.items():
                     if messages:
+                        # logging.warning('Processing kafka messages')
                         for message in messages:
                             self.handle_message_from_kafka(message)
         finally:
@@ -207,14 +200,14 @@ class Worker:
         sent_op, rec_op, partition = channel.split('_')
         # Create a kafka consumer for the given channel and seek the given offset.
         # For every kafka message, send over TCP without logging the message sent.
-        consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
+        replay_consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
         topic_partition = TopicPartition(sent_op+rec_op, int(partition))
-        consumer.assign([topic_partition])
+        replay_consumer.assign([topic_partition])
         while True:
             # start the kafka consumer
             try:
-                await consumer.start()
-                consumer.seek(topic_partition, offset)
+                await replay_consumer.start()
+                replay_consumer.seek(topic_partition, offset)
             except (UnknownTopicOrPartitionError, KafkaConnectionError):
                 time.sleep(1)
                 logging.warning(f'Kafka at {KAFKA_URL} not ready yet, sleeping for 1 second')
@@ -223,16 +216,18 @@ class Worker:
         try:
             # Consume messages
             while True:
-                result = await consumer.getmany(timeout_ms=1)
+                result = await replay_consumer.getmany(timeout_ms=1)
                 for _, messages in result.items():
                     if messages:
+                        # logging.warning('Replaying kafka messages')
                         for message in messages:
                             await self.replay_log_message(message)
         finally:
-            await consumer.stop()        
+            await replay_consumer.stop()        
 
     async def replay_log_message(self, msg):
         deserialized_data: dict = self.networking.decode_message(msg.value)
+        logging.warning(f'replaying msg: {deserialized_data}')
         receiver_info = deserialized_data['__MSG__']['__SENT_TO__']
         await self.networking.replay_message(receiver_info['host'], receiver_info['port'], msg)
 
@@ -257,11 +252,9 @@ class Worker:
         # This data should be added to a replay kafka topic.
         message_type: str = deserialized_data['__COM_TYPE__']
         message = deserialized_data['__MSG__']
-        # logging.warning(f"message key looks like: {msg.key}")
         if message_type == 'RUN_FUN':
             run_func_payload: RunFuncPayload = self.unpack_run_payload(message, msg.key, timestamp=msg.timestamp)
             logging.info(f'RUNNING FUNCTION FROM KAFKA: {run_func_payload.function_name} {run_func_payload.key}')
-            # logging.warning(f'payload from kafka: {run_func_payload.response_socket}')
             self.create_task(
                 self.run_function(
                     run_func_payload
@@ -300,9 +293,17 @@ class Worker:
                     )
             case 'RECOVER_FROM_SNAPSHOT':
                 logging.warning(f'Recovery message received: {message}')
-                # Build the snapshot name from the recovery message received
-                snapshot_to_restore = f'snapshot_{self.id}_{message[0]}.bin'
-                await self.restore_from_snapshot(snapshot_to_restore)
+
+                # If timestamp is zero, it means reset from the beginning
+                # Therefore we reset the local state to an empty dict
+                if message[0] == 0:
+                    async with self.snapshot_state_lock:
+                        self.local_state.data = {}
+                        self.last_messages_processed = {}
+                else:
+                    # Build the snapshot name from the recovery message received
+                    snapshot_to_restore = f'snapshot_{self.id}_{message[0]}.bin'
+                    await self.restore_from_snapshot(snapshot_to_restore)
                 # Replay channels from corresponding offsets in message[1]
                 for channel in message[1].keys():
                     await self.replay_from_kafka(channel, message[1][channel])

@@ -61,7 +61,6 @@ class CoordinatorService:
                     for partition_two in self.partitions_to_ids[operator_two].keys():
                         channel_name = f'{operator_one}_{operator_two}_{int(partition_one) * len(self.partitions_to_ids[operator_two].keys()) + int(partition_two)}'
                         self.messages_received_intervals[str(self.partitions_to_ids[operator_two][partition_two])][channel_name] = [(0,0)]
-        logging.warning(self.partitions_to_ids)
 
     def create_task(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -128,9 +127,7 @@ class CoordinatorService:
 
     async def test_snapshot_recovery(self):
         await self.add_edges_between_workers()
-        logging.warning(self.recovery_graph)
         await self.find_recovery_line()
-        logging.warning(f"recovery line should be: {self.recovery_graph_root_set}")
         await self.send_restore_message()
         await self.clear_checkpoint_details()
 
@@ -183,7 +180,6 @@ class CoordinatorService:
         messages_received = msg['last_messages_processed']
         messages_sent = msg['last_messages_sent']
         self.messages_to_replay[worker_id][int(checkpoint_timestamp)] = messages_received
-        logging.warning(messages_received)
         # We create an ordered list based on (offset, snapshot_timestamp) tuples, such that we have an ordered interval list
         # This enables us to easily check between which two snapshot timestamps a message was sent/received, so that we can add the edges to the right nodes
         for message in messages_received.keys():
@@ -302,8 +298,8 @@ class CoordinatorService:
                         self.recovery_graph[(str(assigned_id), 0)] = set()
                         self.messages_received_intervals[str(assigned_id)] = {}
                         self.messages_sent_intervals[str(assigned_id)] = {}
-                        self.messages_to_replay[str(assigned_id)] = {}
-                        logging.warning(f"Worker registered {message} with id {reply}")
+                        self.messages_to_replay[str(assigned_id)] = {0: {}}
+                        logging.info(f"Worker registered {message} with id {reply}")
                     case 'SNAPSHOT_TAKEN':
                         await self.process_snapshot_information(message)
                     case 'WORKER_FAILED':
