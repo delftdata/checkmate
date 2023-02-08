@@ -94,13 +94,10 @@ class CoordinatorService:
 
     # Recursive method to find all reachable nodes and add them to a set
     async def find_reachable_nodes(self, node):
-        if len(self.recovery_graph[node]) == 0:
-            return set(node)
-        else:
-            reachable_set = self.recovery_graph[node]
-            for next_node in self.recovery_graph[node]:
-                reachable_set = reachable_set.union(await self.find_reachable_nodes(next_node))
-            return reachable_set
+        reachable_set = self.recovery_graph[node]
+        for next_node in self.recovery_graph[node]:
+            reachable_set = reachable_set.union(await self.find_reachable_nodes(next_node))
+        return reachable_set
     
     async def send_restore_message(self):
         # First build a dict that contains for every worker the snapshot timestamp + offsets to replay based on the recovery line
@@ -265,8 +262,11 @@ class CoordinatorService:
             self.recovery_graph[(snapshot_name[1], self.snapshot_timestamps[snapshot_name[1]][snapshot_number-1])].add((snapshot_name[1], snapshot_name[2]))
 
     def init_snapshot_minio_bucket(self):
-        if not self.minio_client.bucket_exists(SNAPSHOT_BUCKET_NAME):
-            self.minio_client.make_bucket(SNAPSHOT_BUCKET_NAME)
+        try:
+            if not self.minio_client.bucket_exists(SNAPSHOT_BUCKET_NAME):
+                self.minio_client.make_bucket(SNAPSHOT_BUCKET_NAME)
+        except:
+            logging.warning("Unable to create minio bucket")
 
     async def main(self):
         router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")  # coordinator

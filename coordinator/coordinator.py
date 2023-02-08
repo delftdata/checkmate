@@ -9,7 +9,7 @@ from universalis.common.stateflow_graph import StateflowGraph
 from universalis.common.stateflow_ingress import IngressTypes
 from universalis.common.logging import logging
 
-from scheduler.round_robin import RoundRobin
+from coordinator.scheduler.round_robin import RoundRobin
 
 
 class NotAStateflowGraph(Exception):
