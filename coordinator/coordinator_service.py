@@ -88,7 +88,7 @@ class CoordinatorService:
                         logging.error("Even the first snapshot got marked, this should not be possible. Index smaller then zero.")
                     else:
                         # Replace it with the checkpoint before the marked one and repeat the process.
-                        self.recovery_graph_root_set[worker_id] = self.snapshot_timestamps[index]
+                        self.recovery_graph_root_set[worker_id] = self.snapshot_timestamps[worker_id][index]
                         root_set_changed = True
 
 
@@ -193,6 +193,7 @@ class CoordinatorService:
             for worker_id_snt in self.messages_sent_intervals.keys():
                 if worker_id_rec==worker_id_snt:
                     continue
+                print(f'adding edges between worker {worker_id_rec} and {worker_id_snt}')
                 for channel in self.messages_received_intervals[worker_id_rec].keys():
                     if channel in self.messages_sent_intervals[worker_id_snt].keys():
                         rec_intervals = self.messages_received_intervals[worker_id_rec][channel]
@@ -217,17 +218,18 @@ class CoordinatorService:
                             
                             # If there is overlap in the intervals an edge should be created from the node at the beginning of the sent interval
                             # To the node at the end of the received interval.
+                            print(f'adding edge from {snt_intervals[snt_index-1][1]} to {rec_intervals[rec_index][1]}')
                             self.recovery_graph[(worker_id_snt, snt_intervals[snt_index-1][1])].add((worker_id_rec, rec_intervals[rec_index][1]))
 
                             # Increase the lowest interval end
-                            if rec_interval_end < snt_interval_end:
-                                rec_interval_start = rec_interval_end
-                                rec_index += 1
-                            elif rec_interval_end == snt_interval_end:
+                            if rec_interval_end == snt_interval_end:
                                 rec_interval_start = rec_interval_end
                                 snt_interval_start = snt_interval_end
                                 rec_index += 1
                                 snt_index += 1
+                            elif rec_interval_end < snt_interval_end:
+                                rec_interval_start = rec_interval_end
+                                rec_index += 1
                             else:
                                 snt_interval_start = snt_interval_end
                                 snt_index += 1
