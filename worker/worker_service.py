@@ -64,6 +64,9 @@ class Worker:
         self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
         self.last_snapshot_timestamp = time.time_ns() // 1000000
         self.total_partitions_per_operator = {}
+        self.last_messages_sent = {}
+        self.last_kafka_consumed = {}
+        self.kafka_consumer = None
 
     async def run_function(
             self,
@@ -116,7 +119,9 @@ class Worker:
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
                 last_messages_sent = await self.networking.flush_kafka_buffer()
                 snapshot_data = {}
+                snapshot_data['last_messages_sent'] = last_messages_sent
                 snapshot_data['last_messages_processed'] = self.last_messages_processed
+                snapshot_data['last_kafka_consumed'] = self.last_kafka_consumed
                 self.last_messages_processed = {}
                 snapshot_data['local_state_data'] = self.local_state.data
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
@@ -153,6 +158,12 @@ class Worker:
             deserialized_data = compressed_msgpack_deserialization(state_to_restore)
             self.local_state.data = deserialized_data['local_state_data']
             self.last_messages_processed = deserialized_data['last_messages_processed']
+            self.last_messages_sent = deserialized_data['last_messages_sent']
+            self.last_kafka_consumed = deserialized_data['last_kafka_consumed']
+            for topic in self.last_kafka_consumed.keys():
+                for partition in self.last_kafka_consumed[topic].keys():
+                    topic_partition_to_reset = TopicPartition(topic, int(partition))
+                    self.kafka_consumer.seek(topic_partition_to_reset, self.last_kafka_consumed[topic][partition])
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
 
@@ -173,12 +184,12 @@ class Worker:
 
     async def start_kafka_consumer(self, topic_partitions: list[TopicPartition]):
         logging.info(f'Creating Kafka consumer for topic partitions: {topic_partitions}')
-        consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
-        consumer.assign(topic_partitions)
+        self.kafka_consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
+        self.kafka_consumer.assign(topic_partitions)
         while True:
             # start the kafka consumer
             try:
-                await consumer.start()
+                await self.kafka_consumer.start()
             except (UnknownTopicOrPartitionError, KafkaConnectionError):
                 time.sleep(1)
                 logging.warning(f'Kafka at {KAFKA_URL} not ready yet, sleeping for 1 second')
@@ -187,16 +198,19 @@ class Worker:
         try:
             # Consume messages
             while True:
-                result = await consumer.getmany(timeout_ms=1)
+                result = await self.kafka_consumer.getmany(timeout_ms=1)
                 for _, messages in result.items():
                     if messages:
                         # logging.warning('Processing kafka messages')
                         for message in messages:
                             self.handle_message_from_kafka(message)
         finally:
-            await consumer.stop()
+            await self.kafka_consumer.stop()
 
     async def replay_from_kafka(self, channel, offset):
+        replay_until = None
+        if channel in self.last_messages_sent.keys():
+            replay_until = self.last_messages_sent[channel]
         sent_op, rec_op, partition = channel.split('_')
         # Create a kafka consumer for the given channel and seek the given offset.
         # For every kafka message, send over TCP without logging the message sent.
@@ -215,21 +229,28 @@ class Worker:
             break
         try:
             # Consume messages
-            while True:
+            keep_replaying = True
+            while keep_replaying:
                 result = await replay_consumer.getmany(timeout_ms=1)
                 for _, messages in result.items():
                     if messages:
                         # logging.warning('Replaying kafka messages')
                         for message in messages:
-                            await self.replay_log_message(message)
+                            if replay_until == None or replay_until >= message.offset:
+                                await self.replay_log_message(message)
+                            else:
+                                keep_replaying = False
+                                break
+                    if keep_replaying == False:
+                        break
         finally:
             await replay_consumer.stop()        
 
     async def replay_log_message(self, msg):
         deserialized_data: dict = self.networking.decode_message(msg.value)
-        logging.warning(f'replaying msg: {deserialized_data}')
+        # logging.warning(f'replaying msg: {deserialized_data}')
         receiver_info = deserialized_data['__MSG__']['__SENT_TO__']
-        await self.networking.replay_message(receiver_info['host'], receiver_info['port'], msg)
+        await self.networking.replay_message(receiver_info['host'], receiver_info['port'], deserialized_data)
 
     async def simple_failure(self):
         await asyncio.sleep(40)
@@ -248,6 +269,9 @@ class Worker:
             f"Consumed: {msg.topic} {msg.partition} {msg.offset} "
             f"{msg.key} {msg.value} {msg.timestamp}"
         )
+        if msg.topic not in self.last_kafka_consumed:
+            self.last_kafka_consumed[msg.topic] = {}
+        self.last_kafka_consumed[msg.topic][str(msg.partition)] = msg.offset
         deserialized_data: dict = self.networking.decode_message(msg.value)
         # This data should be added to a replay kafka topic.
         message_type: str = deserialized_data['__COM_TYPE__']
