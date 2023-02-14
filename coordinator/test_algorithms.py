@@ -176,7 +176,7 @@ async def test_simple_edges():
 
     assert expected_result == dummy_coordinator.recovery_graph
 
-new_recovery_graph = {
+same_interval_recovery_graph = {
     ('1', 0): set([('1', 1)]),
     ('1', 1): set([('1', 2)]),
     ('1', 2): set([('1', 3)]),
@@ -189,9 +189,7 @@ new_recovery_graph = {
 
 @pytest.mark.asyncio
 async def test_same_interval_ends():
-    dummy_coordinator.recovery_graph = new_recovery_graph
-
-    print(dummy_coordinator.recovery_graph)
+    dummy_coordinator.recovery_graph = same_interval_recovery_graph
 
     # If the interval borders are exactly the same, only edges between those intervals should be added.
     same_interval_rec = {
@@ -215,8 +213,6 @@ async def test_same_interval_ends():
     dummy_coordinator.messages_sent_intervals = same_interval_sent
     await dummy_coordinator.add_edges_between_workers()
 
-    print(dummy_coordinator.recovery_graph)
-
     same_interval_res = {
         ('1', 0): set([('1', 1)]),
         ('1', 1): set([('1', 2)]),
@@ -230,3 +226,94 @@ async def test_same_interval_ends():
 
     assert same_interval_res == dummy_coordinator.recovery_graph
 
+@pytest.mark.asyncio
+async def test_clear_checkpoint_details():
+    # Set some dummy values in the coordinator first
+    # Then call clear_checkpoint_details to see if it resets correctly
+    # Mock root_set, messages_to_replay, message_received_intervals and message_sent_intervals
+
+    clear_cp_recovery_graph = {
+        ('1', 0): set([('1', 1)]),
+        ('1', 1): set(),
+        ('2', 0): set([('2', 1)]),
+        ('2', 1): set()
+    }
+
+    clear_cp_root_set = {
+        '1': 1,
+        '2': 1
+    }
+
+    clear_cp_msg_to_replay = {
+        '1': {
+            0: [],
+            1: [0, 1]
+        },
+        '2': {
+            0: [],
+            1: [0, 1]
+        }
+    }
+
+    clear_cp_msg_rec_interval = {
+        '1': {
+            'channel1': [(20, 0), (37, 1)]
+        },
+        '2': {
+            'channel2': [(12, 0), (25, 1)]
+        }
+    }
+
+    clear_cp_msg_snt_interval = {
+        '1': {
+            'channel2': [(17, 0), (25, 1)]
+        },
+        '2': {
+            'channel1': [(28, 0), (37, 1)]
+        }
+    }
+
+    dummy_coordinator.recovery_graph = clear_cp_recovery_graph
+    dummy_coordinator.recovery_graph_root_set = clear_cp_root_set
+    dummy_coordinator.messages_to_replay = clear_cp_msg_to_replay
+    dummy_coordinator.messages_received_intervals = clear_cp_msg_rec_interval
+    dummy_coordinator.messages_sent_intervals = clear_cp_msg_snt_interval
+
+    await dummy_coordinator.clear_checkpoint_details()
+
+    graph_after_clear = {
+        ('1', 1): set(),
+        ('2', 1): set()
+    }
+
+    msg_rec_after_clear = {
+        '1': {
+            'channel1': [(37, 1)]
+        },
+        '2': {
+            'channel2': [(25, 1)]
+        }
+    }
+
+    msg_snt_after_clear = {
+        '1': {
+            'channel2': [(25, 1)]
+        },
+        '2': {
+            'channel1': [(37, 1)]
+        }
+    }
+
+    msg_to_replay_after_clear = {
+        '1': {
+            1: [0, 1]
+        },
+        '2': {
+            1: [0, 1]
+        }
+    }
+
+    assert msg_to_replay_after_clear == dummy_coordinator.messages_to_replay
+    assert msg_snt_after_clear == dummy_coordinator.messages_sent_intervals
+    assert msg_rec_after_clear == dummy_coordinator.messages_received_intervals
+    assert graph_after_clear == dummy_coordinator.recovery_graph

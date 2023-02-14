@@ -193,7 +193,6 @@ class CoordinatorService:
             for worker_id_snt in self.messages_sent_intervals.keys():
                 if worker_id_rec==worker_id_snt:
                     continue
-                print(f'adding edges between worker {worker_id_rec} and {worker_id_snt}')
                 for channel in self.messages_received_intervals[worker_id_rec].keys():
                     if channel in self.messages_sent_intervals[worker_id_snt].keys():
                         rec_intervals = self.messages_received_intervals[worker_id_rec][channel]
@@ -218,7 +217,6 @@ class CoordinatorService:
                             
                             # If there is overlap in the intervals an edge should be created from the node at the beginning of the sent interval
                             # To the node at the end of the received interval.
-                            print(f'adding edge from {snt_intervals[snt_index-1][1]} to {rec_intervals[rec_index][1]}')
                             self.recovery_graph[(worker_id_snt, snt_intervals[snt_index-1][1])].add((worker_id_rec, rec_intervals[rec_index][1]))
 
                             # Increase the lowest interval end
