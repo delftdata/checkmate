@@ -77,7 +77,7 @@ class CoordinatorService:
             # First iterate to create a set of all reachable nodes in the graph from the root set (mark all reachable nodes)
             for worker_id in self.recovery_graph_root_set.keys():
                 snapshot_timestamp = self.recovery_graph_root_set[worker_id]
-                marked_nodes = marked_nodes.union(await self.find_reachable_nodes((worker_id, snapshot_timestamp)))
+                marked_nodes = marked_nodes.union(await self.find_reachable_nodes((worker_id, snapshot_timestamp), len(self.recovery_graph.keys())))
 
             # If node in the root set is marked, replace it with an earlier checkpoint
             for worker_id in self.recovery_graph_root_set.keys():
@@ -93,10 +93,12 @@ class CoordinatorService:
 
 
     # Recursive method to find all reachable nodes and add them to a set
-    async def find_reachable_nodes(self, node):
+    async def find_reachable_nodes(self, node, max_steps):
+        if max_steps == 0:
+            return set()
         reachable_set = self.recovery_graph[node]
         for next_node in self.recovery_graph[node]:
-            reachable_set = reachable_set.union(await self.find_reachable_nodes(next_node))
+            reachable_set = reachable_set.union(await self.find_reachable_nodes(next_node, max_steps-1))
         return reachable_set
     
     async def send_restore_message(self):

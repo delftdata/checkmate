@@ -36,7 +36,7 @@ basic_recovery_graph_snapshot_timestamps = {
 async def test_find_reachable_nodes_empty():
     dummy_coordinator.recovery_graph = basic_recovery_graph
     node = ('1', 2)
-    result = await dummy_coordinator.find_reachable_nodes(node)
+    result = await dummy_coordinator.find_reachable_nodes(node, 4)
     expected_result = set()
     assert result == expected_result
 
@@ -44,7 +44,7 @@ async def test_find_reachable_nodes_empty():
 async def test_find_reachable_nodes_non_empty():
     dummy_coordinator.recovery_graph = basic_recovery_graph
     node = ('1', 1)
-    result = await dummy_coordinator.find_reachable_nodes(node)
+    result = await dummy_coordinator.find_reachable_nodes(node, 4)
     expected_result = set([('1', 2)])
     assert result == expected_result
 
@@ -52,7 +52,7 @@ async def test_find_reachable_nodes_non_empty():
 async def test_find_reachable_nodes_recursion():
     dummy_coordinator.recovery_graph = basic_recovery_graph
     node = ('2', 0)
-    result = await dummy_coordinator.find_reachable_nodes(node)
+    result = await dummy_coordinator.find_reachable_nodes(node, 4)
     expected_result = set([('1', 1), ('1', 2)])
     assert result == expected_result
 
