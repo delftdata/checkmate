@@ -1,6 +1,8 @@
 import pytest
 import os
 
+# There is some weird import issue with pytest for which I need to change the coordinator import to coordinator.scheduler.round_robin
+
 os.environ['MINIO_HOST'] = '127.0.0.1'
 os.environ['MINIO_PORT'] = '9000'
 os.environ['MINIO_ROOT_USER'] = 'minio'
