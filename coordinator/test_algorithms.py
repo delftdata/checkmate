@@ -319,3 +319,59 @@ async def test_clear_checkpoint_details():
     assert msg_snt_after_clear == dummy_coordinator.messages_sent_intervals
     assert msg_rec_after_clear == dummy_coordinator.messages_received_intervals
     assert graph_after_clear == dummy_coordinator.recovery_graph
+
+@pytest.mark.asyncio
+async def test_find_channels_to_replay():
+    # Mock recovery graph root set, messages_to_replay and partitions_to_ids
+    simple_root_set = {
+        '1': 3,
+        '2': 2
+    }
+
+    partitions_to_ids = {
+        'operator1': {
+            '0': 1,
+            '1': 2
+        },
+        'operator2': {
+            '0': 1,
+            '1': 2
+        }
+    }
+
+    # This basically states; for worker_id 1 and snapshot_timestamp 3, channel operator1_operator2_2 has to be replayed from offset 12
+    # Note that the channel number is determined by the partitions_to_ids (since channel number = send_op_part*len(rec_op)+rec_op_part)
+    # An example for msg_to_replay['1'][3] for channel operator1_operator2_x, given that we want it to be sent by worker_id 2, using mock partitions_to_ids:
+    # Operator2 is the receiving operator in this case and hosted by worker_id 1 and operator1 is sending op hosted by worker_id 2,
+    # thus our formula looks like; 1 * 2 + 0 = 2, thus the channel_no in msg_to_replay should be 2.
+    msg_to_replay = {
+        '1': {
+            3: {
+                'operator1_operator2_2': 12
+            }
+        },
+        '2': {
+            2: {
+                'operator1_operator2_1': 17
+            }
+        }
+    }
+
+    dummy_coordinator.recovery_graph_root_set = simple_root_set
+    dummy_coordinator.partitions_to_ids = partitions_to_ids
+    dummy_coordinator.messages_to_replay = msg_to_replay
+
+    result = await dummy_coordinator.find_channels_to_replay()
+
+    # We created the mock such that the channels to replayed for both snapshots are sent by the other worker_id
+    # Thus the channels in msg_to_replay should simply be swapped in this case.
+    expected_result = {
+        '1': (3, {
+            'operator1_operator2_1': 17
+        }),
+        '2': (2, {
+            'operator1_operator2_2': 12
+        })
+    }
+
+    assert result == expected_result
