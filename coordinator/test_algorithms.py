@@ -356,7 +356,7 @@ async def test_find_channels_to_replay():
             }
         }
     }
-
+   
     dummy_coordinator.recovery_graph_root_set = simple_root_set
     dummy_coordinator.partitions_to_ids = partitions_to_ids
     dummy_coordinator.messages_to_replay = msg_to_replay

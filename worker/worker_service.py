@@ -114,6 +114,7 @@ class Worker:
     # if you want to use this run it with self.create_task(self.take_snapshot())
     async def take_snapshot(self):
         if isinstance(self.local_state, InMemoryOperatorState):
+            logging.warning('taking snapshot')
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
@@ -229,23 +230,17 @@ class Worker:
                 continue
             break
         try:
-            # Consume messages
-            keep_replaying = True
-            while keep_replaying:
-                result = await replay_consumer.getmany(timeout_ms=1)
-                for _, messages in result.items():
-                    if messages:
-                        # logging.warning('Replaying kafka messages')
-                        for message in messages:
-                            if replay_until == None or replay_until >= message.offset:
-                                await self.replay_log_message(message)
-                            else:
-                                keep_replaying = False
-                                break
-                    if keep_replaying == False:
-                        break
+            while True:
+                result = await replay_consumer.getone()
+                if replay_until == None or replay_until >= result.offset:
+                    await self.replay_log_message(result)
+                else:
+                    break
         finally:
-            await replay_consumer.stop()        
+            # Some unclosed AIOKafkaConnection error is triggered by replay_consumer.stop()
+            logging.warning(f'Reached finally for channel {channel}')
+            await replay_consumer.stop()
+            logging.warning(f'Stopped consumer for channel {channel}')  
 
     async def replay_log_message(self, msg):
         deserialized_data: dict = self.networking.decode_message(msg.value)
