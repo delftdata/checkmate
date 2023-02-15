@@ -206,6 +206,7 @@ class Worker:
                             self.handle_message_from_kafka(message)
         finally:
             await self.kafka_consumer.stop()
+            await self.networking.stop_kafka_producer()
 
     async def replay_from_kafka(self, channel, offset):
         replay_until = None

@@ -102,11 +102,19 @@ class CoordinatorService:
         return reachable_set
     
     async def send_restore_message(self):
-        # First build a dict that contains for every worker the snapshot timestamp + offsets to replay based on the recovery line
-        to_recover = {}
+        to_replay = await self.find_channels_to_replay()
+
+        for worker_id in to_replay.keys():
+            # Now we have to send a message to every worker containing the tuple we just created.
+            # The worker can then restore the snapshot with the corresponding timestamp and replay its outgoing channels from the given offsets.
+            await self.request_recovery_from_checkpoint(worker_id, to_replay[worker_id])
+
+    async def find_channels_to_replay(self):
+        # Build a dict that contains for every worker the snapshot timestamp + offsets to replay based on the recovery line
+        to_replay = {}
         for worker_id in self.recovery_graph_root_set.keys():
             # Initiate a corresponding tuple for every worker_id, tuple contains (snapshot_timestamp, {channel: offset})
-            to_recover[worker_id] = (self.recovery_graph_root_set[worker_id], {})
+            to_replay[worker_id] = (self.recovery_graph_root_set[worker_id], {})
         for worker_id in self.recovery_graph_root_set.keys():
             to_replay_for_snapshot = self.messages_to_replay[worker_id][self.recovery_graph_root_set[worker_id]]
             for channel in to_replay_for_snapshot.keys():
@@ -118,11 +126,8 @@ class CoordinatorService:
                 worker_id_to_replay = self.partitions_to_ids[snt_op][str(snt_op_partition)]
                 # The hosting worker_id should replay the channel in question from the last offset received for this checkpoint
                 # In case of our example: the worker that hosts the calculated map partition should replay messages sent on channel map_filter_27 from corresponding offset.
-                to_recover[str(worker_id_to_replay)][1][channel] = to_replay_for_snapshot[channel]
-        for worker_id in to_recover.keys():
-            # Now we have to send a message to every worker containing the tuple we just created.
-            # The worker can then restore the snapshot with the corresponding timestamp and replay its outgoing channels from the given offsets.
-            await self.request_recovery_from_checkpoint(worker_id, to_recover[worker_id])
+                to_replay[str(worker_id_to_replay)][1][channel] = to_replay_for_snapshot[channel]
+        return to_replay
 
     async def test_snapshot_recovery(self):
         await self.add_edges_between_workers()
