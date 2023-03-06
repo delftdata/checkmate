@@ -10,7 +10,7 @@ from universalis.universalis import Universalis
 from functions import graph
 from functions.graph import filter_operator
 
-N_VALUES = 50000
+N_VALUES = 20000
 
 
 UNIVERSALIS_HOST: str = 'localhost'
@@ -36,7 +36,9 @@ async def main():
 
     # SEND REQUESTS
     tasks = []
-    for _ in range(N_VALUES):
+    for index in range(N_VALUES):
+        if index % 1000 == 0:
+            time.sleep(1)
         value = random.uniform(-10.0, 10.0)
         key = random.randint(0, 6)
         tasks.append(universalis.send_kafka_event(operator=filter_operator,

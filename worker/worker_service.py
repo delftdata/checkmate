@@ -114,7 +114,6 @@ class Worker:
     # if you want to use this run it with self.create_task(self.take_snapshot())
     async def take_snapshot(self):
         if isinstance(self.local_state, InMemoryOperatorState):
-            logging.warning('taking snapshot')
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
@@ -125,6 +124,7 @@ class Worker:
                 snapshot_data['last_kafka_consumed'] = self.last_kafka_consumed
                 self.last_messages_processed = {}
                 snapshot_data['local_state_data'] = self.local_state.data
+                logging.warning(f'current state being stored: {self.local_state.data}')
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
             snapshot_time = time.time_ns() // 1000000
             snapshot_name: str = f"snapshot_{self.id}_{snapshot_time}.bin"
@@ -164,7 +164,7 @@ class Worker:
             for topic in self.last_kafka_consumed.keys():
                 for partition in self.last_kafka_consumed[topic].keys():
                     topic_partition_to_reset = TopicPartition(topic, int(partition))
-                    self.kafka_consumer.seek(topic_partition_to_reset, self.last_kafka_consumed[topic][partition])
+                    self.kafka_consumer.seek(topic_partition_to_reset, (self.last_kafka_consumed[topic][partition] + 1))
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
 
@@ -238,9 +238,9 @@ class Worker:
                     break
         finally:
             # Some unclosed AIOKafkaConnection error is triggered by replay_consumer.stop()
-            logging.warning(f'Reached finally for channel {channel}')
+            # logging.warning(f'Reached finally for channel {channel}')
             await replay_consumer.stop()
-            logging.warning(f'Stopped consumer for channel {channel}')  
+            # logging.warning(f'Stopped consumer for channel {channel}')  
 
     async def replay_log_message(self, msg):
         deserialized_data: dict = self.networking.decode_message(msg.value)
