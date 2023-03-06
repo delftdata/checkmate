@@ -130,6 +130,7 @@ class CoordinatorService:
         return to_replay
 
     async def test_snapshot_recovery(self):
+        # TODO: Update methods one by one to incorporate operator.
         await self.add_edges_between_workers()
         await self.find_recovery_line()
         await self.send_restore_message()
@@ -180,20 +181,20 @@ class CoordinatorService:
 
     async def store_messages(self, msg):
         # Decided to map the interval logs per workerid, since we are looking for edges between workers.
-        _, worker_id, checkpoint_timestamp = msg['snapshot_name'].replace('.bin', '').split('_')
+        _, worker_id, op_name, checkpoint_timestamp = msg['snapshot_name'].replace('.bin', '').split('_')
         messages_received = msg['last_messages_processed']
         messages_sent = msg['last_messages_sent']
-        self.messages_to_replay[worker_id][int(checkpoint_timestamp)] = messages_received
+        self.messages_to_replay[worker_id][op_name][int(checkpoint_timestamp)] = messages_received
         # We create an ordered list based on (offset, snapshot_timestamp) tuples, such that we have an ordered interval list
         # This enables us to easily check between which two snapshot timestamps a message was sent/received, so that we can add the edges to the right nodes
         for message in messages_received.keys():
-            if message not in self.messages_received_intervals[worker_id].keys():
-                self.messages_received_intervals[worker_id][message] = []
-            bisect.insort(self.messages_received_intervals[worker_id][message], (messages_received[message], int(checkpoint_timestamp)))
+            if message not in self.messages_received_intervals[worker_id][op_name].keys():
+                self.messages_received_intervals[worker_id][op_name][message] = []
+            bisect.insort(self.messages_received_intervals[worker_id][op_name][message], (messages_received[message], int(checkpoint_timestamp)))
         for message in messages_sent.keys():
-            if message not in self.messages_sent_intervals[worker_id].keys():
-                self.messages_sent_intervals[worker_id][message] = []
-            bisect.insort(self.messages_sent_intervals[worker_id][message], (messages_sent[message], int(checkpoint_timestamp)))
+            if message not in self.messages_sent_intervals[worker_id][op_name].keys():
+                self.messages_sent_intervals[worker_id][op_name][message] = []
+            bisect.insort(self.messages_sent_intervals[worker_id][op_name][message], (messages_sent[message], int(checkpoint_timestamp)))
 
     async def add_edges_between_workers(self):
         for worker_id_rec in self.messages_received_intervals.keys():
@@ -248,25 +249,29 @@ class CoordinatorService:
     async def process_snapshot_information(self, message):
         snapshot_name = message['snapshot_name'].replace('.bin', '').split('_')
         # Store the snapshot timestamp in a sorted list
-        bisect.insort(self.snapshot_timestamps[snapshot_name[1]], int(snapshot_name[2]))
+        bisect.insort(self.snapshot_timestamps[snapshot_name[1]][snapshot_name[2]], int(snapshot_name[3]))
         # Store the sent and received message information
         # This will be used later to add the edges between workers
         await self.store_messages(message)
         # Update root set
-        if self.recovery_graph_root_set[snapshot_name[1]] < int(snapshot_name[2]):
-            self.recovery_graph_root_set[snapshot_name[1]] = int(snapshot_name[2])
+        if self.recovery_graph_root_set[snapshot_name[1]][snapshot_name[2]] < int(snapshot_name[3]):
+            self.recovery_graph_root_set[snapshot_name[1]][snapshot_name[2]] = int(snapshot_name[3])
         # Add nodes and edges within a process to the recovery graph
         await self.add_to_recovery_graph(snapshot_name)
+
+        # Seems to work? (fingers crossed, will keep the warnings here just in case)
+        #logging.warning(f'root set looks like: {self.recovery_graph_root_set}')
+        #logging.warning(f'recovery graph: {self.recovery_graph}')
         
     async def add_to_recovery_graph(self, snapshot_name):
         # Recovery graph looks like the following:
         # The nodes (keys) are the (worker_id, snapshot_time)
         # The outgoing edges (values) are lists (sets) containing (worker_id, snapshot_time) nodes
-        self.recovery_graph[(snapshot_name[1], int(snapshot_name[2]))] = set()
-        snapshot_number = self.snapshot_timestamps[snapshot_name[1]].index(int(snapshot_name[2]))
+        self.recovery_graph[(snapshot_name[1], snapshot_name[2], int(snapshot_name[3]))] = set()
+        snapshot_number = self.snapshot_timestamps[snapshot_name[1]][snapshot_name[2]].index(int(snapshot_name[3]))
         if snapshot_number > 0:
             # Look up the previous snapshot timestamp and add an edge from that snapshot to the one we are currently processing.
-            self.recovery_graph[(snapshot_name[1], self.snapshot_timestamps[snapshot_name[1]][snapshot_number-1])].add((snapshot_name[1], snapshot_name[2]))
+            self.recovery_graph[(snapshot_name[1], snapshot_name[2], self.snapshot_timestamps[snapshot_name[1]][snapshot_name[2]][snapshot_number-1])].add((snapshot_name[1], snapshot_name[2], snapshot_name[3]))
 
     def init_snapshot_minio_bucket(self):
         try:
@@ -293,6 +298,15 @@ class CoordinatorService:
                     case 'SEND_EXECUTION_GRAPH':
                         # Received execution graph from a universalis client
                         self.create_task(self.schedule_operators(message))
+                        for op in message.nodes.keys():
+                            for id in self.worker_ips.keys():
+                                self.recovery_graph_root_set[id][op] = 0
+                                self.snapshot_timestamps[id][op] = [0]
+                                self.messages_to_replay[id][op] = {0: {}}
+                                self.recovery_graph[(id, op, 0)] = set()
+                                self.messages_received_intervals[id][op] = {}
+                                self.messages_sent_intervals[id][op] = {}
+                                self.messages_to_replay[id][op] = {}
                         logging.info(f"Submitted Stateflow Graph to Workers")
                     case 'REGISTER_WORKER':
                         # A worker registered to the coordinator
@@ -300,16 +314,14 @@ class CoordinatorService:
                         self.worker_ips[str(assigned_id)] = message
                         reply = self.networking.encode_message(assigned_id, Serializer.MSGPACK)
                         router.write((resp_adr, reply))
-                        self.recovery_graph_root_set[str(assigned_id)] = 0
-                        self.snapshot_timestamps[str(assigned_id)] = [0]
-                        self.recovery_graph[(str(assigned_id), 0)] = set()
+                        self.recovery_graph_root_set[str(assigned_id)] = {}
+                        self.snapshot_timestamps[str(assigned_id)] = {}
                         self.messages_received_intervals[str(assigned_id)] = {}
                         self.messages_sent_intervals[str(assigned_id)] = {}
-                        self.messages_to_replay[str(assigned_id)] = {0: {}}
+                        self.messages_to_replay[str(assigned_id)] = {}
                         logging.info(f"Worker registered {message} with id {reply}")
                     case 'SNAPSHOT_TAKEN':
-                        logging.warning(f'snapshot taken received: {message}')
-                        #await self.process_snapshot_information(message)
+                        await self.process_snapshot_information(message)
                     case 'WORKER_FAILED':
                         logging.warning('Worker failed! Find recovery line.')
                         #await self.test_snapshot_recovery()

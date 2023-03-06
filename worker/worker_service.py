@@ -121,13 +121,10 @@ class Worker:
                 snapshot_data = {}
                 snapshot_data['last_messages_sent'] = last_messages_sent
                 snapshot_data['last_messages_processed'] = self.last_messages_processed[operator]
-                # Maybe we should only add last_kafka_consumed for the first operator in the chain, so the one that reads from kafka
                 if operator in self.last_kafka_consumed.keys():
-                    logging.warning(f'Adding kafka consumed: {self.last_kafka_consumed}')
                     snapshot_data['last_kafka_consumed'] = self.last_kafka_consumed
                 self.last_messages_processed[operator] = {}
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
-                logging.warning(f'current state being stored: {self.local_state.data[operator]}')
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
             snapshot_time = time.time_ns() // 1000000
             snapshot_name: str = f"snapshot_{self.id}_{operator}_{snapshot_time}.bin"
