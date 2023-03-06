@@ -79,9 +79,9 @@ class NetworkingManager:
             break
         logging.info(f'KAFKA PRODUCER STARTED FOR NETWORKING')
 
-    async def flush_kafka_buffer(self):
-        last_msg_sent = self.last_messages_sent
-        self.last_messages_sent = {}
+    async def flush_kafka_buffer(self, operator):
+        last_msg_sent = self.last_messages_sent[operator]
+        self.last_messages_sent[operator] = {}
         await self.kafka_producer.flush()
         return last_msg_sent
 
@@ -90,6 +90,8 @@ class NetworkingManager:
 
     async def set_total_partitions_per_operator(self, par_per_op):
         self.total_partitions_per_operator = par_per_op
+        for key in par_per_op.keys():
+            self.last_messages_sent[key] = {}
 
     def close_all_connections(self):
         for pool in self.pools.values():
@@ -134,7 +136,7 @@ class NetworkingManager:
                                                       value=self.encode_message(msg, serializer),
                                                       partition=sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)
             msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
-            self.last_messages_sent[sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
+            self.last_messages_sent[sending_name][sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
         msg = self.encode_message(msg, serializer)
         socket_conn.zmq_socket.write((msg, ))
 

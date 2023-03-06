@@ -108,26 +108,29 @@ class Worker:
             ))
         if send_from is not None:
             incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
-            self.last_messages_processed[incoming_channel] = send_from['kafka_offset']
+            self.last_messages_processed[payload.operator_name][incoming_channel] = send_from['kafka_offset']
         return success
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
-    async def take_snapshot(self):
+    async def take_snapshot(self, operator):
         if isinstance(self.local_state, InMemoryOperatorState):
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
-                last_messages_sent = await self.networking.flush_kafka_buffer()
+                last_messages_sent = await self.networking.flush_kafka_buffer(operator)
                 snapshot_data = {}
                 snapshot_data['last_messages_sent'] = last_messages_sent
-                snapshot_data['last_messages_processed'] = self.last_messages_processed
-                snapshot_data['last_kafka_consumed'] = self.last_kafka_consumed
-                self.last_messages_processed = {}
-                snapshot_data['local_state_data'] = self.local_state.data
-                logging.warning(f'current state being stored: {self.local_state.data}')
+                snapshot_data['last_messages_processed'] = self.last_messages_processed[operator]
+                # Maybe we should only add last_kafka_consumed for the first operator in the chain, so the one that reads from kafka
+                if operator in self.last_kafka_consumed.keys():
+                    logging.warning(f'Adding kafka consumed: {self.last_kafka_consumed}')
+                    snapshot_data['last_kafka_consumed'] = self.last_kafka_consumed
+                self.last_messages_processed[operator] = {}
+                snapshot_data['local_state_data'] = self.local_state.data[operator]
+                logging.warning(f'current state being stored: {self.local_state.data[operator]}')
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
             snapshot_time = time.time_ns() // 1000000
-            snapshot_name: str = f"snapshot_{self.id}_{snapshot_time}.bin"
+            snapshot_name: str = f"snapshot_{self.id}_{operator}_{snapshot_time}.bin"
             await self.minio_client_async.put_object(
                 bucket_name=SNAPSHOT_BUCKET_NAME,
                 object_name=snapshot_name,
@@ -352,6 +355,8 @@ class Worker:
 
     async def handle_execution_plan(self, message):
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator = message
+        for op in self.total_partitions_per_operator.keys():
+            self.last_messages_processed[op] = {}
         await self.networking.set_total_partitions_per_operator(self.total_partitions_per_operator)
         del self.peers[self.id]
         operator: Operator
@@ -371,16 +376,17 @@ class Worker:
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
             await asyncio.sleep(checkpoint_interval)
-            await self.take_snapshot()
+            for key in self.total_partitions_per_operator.keys():
+                await self.take_snapshot(key)
 
-    async def communication_induced_checkpointing(self, checkpoint_interval):
-        while True:
-            asyncio.sleep(checkpoint_interval)
-            current_time = time.time_ns // 1000000
-            if current_time > self.last_snapshot_timestamp + checkpoint_interval*1000:
-                await self.take_snapshot()
-            else:
-                asyncio.sleep(ceil((self.last_snapshot_timestamp + checkpoint_interval*1000 - current_time) / 1000))
+#    async def communication_induced_checkpointing(self, checkpoint_interval):
+#        while True:
+#            asyncio.sleep(checkpoint_interval)
+#            current_time = time.time_ns // 1000000
+#            if current_time > self.last_snapshot_timestamp + checkpoint_interval*1000:
+#                await self.take_snapshot()
+#            else:
+#                asyncio.sleep(ceil((self.last_snapshot_timestamp + checkpoint_interval*1000 - current_time) / 1000))
             
 
     async def start_tcp_service(self):

@@ -308,10 +308,11 @@ class CoordinatorService:
                         self.messages_to_replay[str(assigned_id)] = {0: {}}
                         logging.info(f"Worker registered {message} with id {reply}")
                     case 'SNAPSHOT_TAKEN':
-                        await self.process_snapshot_information(message)
+                        logging.warning(f'snapshot taken received: {message}')
+                        #await self.process_snapshot_information(message)
                     case 'WORKER_FAILED':
                         logging.warning('Worker failed! Find recovery line.')
-                        await self.test_snapshot_recovery()
+                        #await self.test_snapshot_recovery()
                     case _:
                         # Any other message type
                         logging.error(f"COORDINATOR SERVER: Non supported message type: {message_type}")
