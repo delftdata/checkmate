@@ -150,21 +150,22 @@ class Worker:
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
-    async def restore_from_snapshot(self, snapshot_to_restore):
+    async def restore_from_snapshot(self, snapshot_to_restore, operator_name):
         state_to_restore = self.minio_client.get_object(
             bucket_name=SNAPSHOT_BUCKET_NAME,
             object_name=snapshot_to_restore
         ).data
         async with self.snapshot_state_lock:
             deserialized_data = compressed_msgpack_deserialization(state_to_restore)
-            self.local_state.data = deserialized_data['local_state_data']
-            self.last_messages_processed = deserialized_data['last_messages_processed']
-            self.last_messages_sent = deserialized_data['last_messages_sent']
-            self.last_kafka_consumed = deserialized_data['last_kafka_consumed']
-            for topic in self.last_kafka_consumed.keys():
-                for partition in self.last_kafka_consumed[topic].keys():
-                    topic_partition_to_reset = TopicPartition(topic, int(partition))
-                    self.kafka_consumer.seek(topic_partition_to_reset, (self.last_kafka_consumed[topic][partition] + 1))
+            self.local_state.data[operator_name] = deserialized_data['local_state_data']
+            self.last_messages_processed[operator_name] = deserialized_data['last_messages_processed']
+            self.last_messages_sent[operator_name] = deserialized_data['last_messages_sent']
+            if operator_name in self.last_kafka_consumed.keys():
+                self.last_kafka_consumed[operator_name] = deserialized_data['last_kafka_consumed']
+                for topic in self.last_kafka_consumed[operator_name].keys():
+                    for partition in self.last_kafka_consumed[operator_name][topic].keys():
+                        topic_partition_to_reset = TopicPartition(topic, int(partition))
+                        self.kafka_consumer.seek(topic_partition_to_reset, (self.last_kafka_consumed[operator_name][topic][partition] + 1))
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
 
@@ -313,20 +314,21 @@ class Worker:
                     )
             case 'RECOVER_FROM_SNAPSHOT':
                 logging.warning(f'Recovery message received: {message}')
+                for op_name in message.keys():
 
-                # If timestamp is zero, it means reset from the beginning
-                # Therefore we reset the local state to an empty dict
-                if message[0] == 0:
-                    async with self.snapshot_state_lock:
-                        self.local_state.data = {}
-                        self.last_messages_processed = {}
-                else:
-                    # Build the snapshot name from the recovery message received
-                    snapshot_to_restore = f'snapshot_{self.id}_{message[0]}.bin'
-                    await self.restore_from_snapshot(snapshot_to_restore)
-                # Replay channels from corresponding offsets in message[1]
-                for channel in message[1].keys():
-                    await self.replay_from_kafka(channel, message[1][channel])
+                    # If timestamp is zero, it means reset from the beginning
+                    # Therefore we reset the local state to an empty dict
+                    if message[op_name][0] == 0:
+                        async with self.snapshot_state_lock:
+                            self.local_state.data[op_name] = {}
+                            self.last_messages_processed[op_name] = {}
+                    else:
+                        # Build the snapshot name from the recovery message received
+                        snapshot_to_restore = f'snapshot_{self.id}_{op_name}_{message[op_name][0]}.bin'
+                        await self.restore_from_snapshot(snapshot_to_restore, op_name)
+                    # Replay channels from corresponding offsets in message[1]
+                    for channel in message[op_name][1].keys():
+                        await self.replay_from_kafka(channel, message[op_name][1][channel])
             case 'RECEIVE_EXE_PLN':  # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
                 # This contains all the operators of a job assigned to this worker
 
@@ -373,6 +375,7 @@ class Worker:
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
             await asyncio.sleep(checkpoint_interval)
+            logging.warning(f'current state: {self.local_state.data}')
             for key in self.total_partitions_per_operator.keys():
                 await self.take_snapshot(key)
 

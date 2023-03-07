@@ -60,7 +60,7 @@ class CoordinatorService:
                 for partition_one in self.partitions_to_ids[operator_one].keys():
                     for partition_two in self.partitions_to_ids[operator_two].keys():
                         channel_name = f'{operator_one}_{operator_two}_{int(partition_one) * len(self.partitions_to_ids[operator_two].keys()) + int(partition_two)}'
-                        self.messages_received_intervals[str(self.partitions_to_ids[operator_two][partition_two])][channel_name] = [(0,0)]
+                        self.messages_received_intervals[str(self.partitions_to_ids[operator_two][partition_two])][operator_two][channel_name] = [(0,0)]
 
     def create_task(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -76,26 +76,30 @@ class CoordinatorService:
             root_set_changed = False
             # First iterate to create a set of all reachable nodes in the graph from the root set (mark all reachable nodes)
             for worker_id in self.recovery_graph_root_set.keys():
-                snapshot_timestamp = self.recovery_graph_root_set[worker_id]
-                marked_nodes = marked_nodes.union(await self.find_reachable_nodes((worker_id, snapshot_timestamp), len(self.recovery_graph.keys())))
+                for op_name in self.recovery_graph_root_set[worker_id].keys():
+                    snapshot_timestamp = self.recovery_graph_root_set[worker_id][op_name]
+                    marked_nodes = marked_nodes.union(await self.find_reachable_nodes((worker_id, op_name, snapshot_timestamp), len(self.recovery_graph.keys())))
 
             # If node in the root set is marked, replace it with an earlier checkpoint
             for worker_id in self.recovery_graph_root_set.keys():
-                snapshot_timestamp = self.recovery_graph_root_set[worker_id]
-                if (worker_id, snapshot_timestamp) in marked_nodes:
-                    index = self.snapshot_timestamps[worker_id].index(snapshot_timestamp) - 1
-                    if index < 0:
-                        logging.error("Even the first snapshot got marked, this should not be possible. Index smaller then zero.")
-                    else:
-                        # Replace it with the checkpoint before the marked one and repeat the process.
-                        self.recovery_graph_root_set[worker_id] = self.snapshot_timestamps[worker_id][index]
-                        root_set_changed = True
+                for op_name in self.recovery_graph_root_set[worker_id].keys():
+                    snapshot_timestamp = self.recovery_graph_root_set[worker_id][op_name]
+                    if (worker_id, op_name, snapshot_timestamp) in marked_nodes:
+                        index = self.snapshot_timestamps[worker_id][op_name].index(snapshot_timestamp) - 1
+                        if index < 0:
+                            logging.error("Even the first snapshot got marked, this should not be possible. Index smaller then zero.")
+                        else:
+                            # Replace it with the checkpoint before the marked one and repeat the process.
+                            self.recovery_graph_root_set[worker_id][op_name] = self.snapshot_timestamps[worker_id][op_name][index]
+                            root_set_changed = True
 
 
     # Recursive method to find all reachable nodes and add them to a set
     async def find_reachable_nodes(self, node, max_steps):
         if max_steps == 0:
             return set()
+        if node not in self.recovery_graph.keys():
+            logging.warning(f'Node was not found in: {self.recovery_graph}')
         reachable_set = self.recovery_graph[node]
         for next_node in self.recovery_graph[node]:
             reachable_set = reachable_set.union(await self.find_reachable_nodes(next_node, max_steps-1))
@@ -113,20 +117,23 @@ class CoordinatorService:
         # Build a dict that contains for every worker the snapshot timestamp + offsets to replay based on the recovery line
         to_replay = {}
         for worker_id in self.recovery_graph_root_set.keys():
-            # Initiate a corresponding tuple for every worker_id, tuple contains (snapshot_timestamp, {channel: offset})
-            to_replay[worker_id] = (self.recovery_graph_root_set[worker_id], {})
+            to_replay[worker_id] = {}
+            for op_name in self.recovery_graph_root_set[worker_id].keys():
+            # Initiate a corresponding tuple for every worker_id, op_name. Tuple contains (snapshot_timestamp, {channel: offset})
+                to_replay[worker_id][op_name] = (self.recovery_graph_root_set[worker_id][op_name], {})
         for worker_id in self.recovery_graph_root_set.keys():
-            to_replay_for_snapshot = self.messages_to_replay[worker_id][self.recovery_graph_root_set[worker_id]]
-            for channel in to_replay_for_snapshot.keys():
-                # Split the channel string for its components (example: map_filter_27)
-                snt_op, rec_op, channel_no = channel.split('_')
-                # Divide the channel number by the amount of partitions of the receiving operator (in the example case: 27 / no_partitions(filter) )
-                snt_op_partition = math.floor(int(channel_no) / len(self.partitions_to_ids[rec_op].keys()))
-                # We now have the partition of the sending operator (example: map), so we can look up which worker_id hosts this partition
-                worker_id_to_replay = self.partitions_to_ids[snt_op][str(snt_op_partition)]
-                # The hosting worker_id should replay the channel in question from the last offset received for this checkpoint
-                # In case of our example: the worker that hosts the calculated map partition should replay messages sent on channel map_filter_27 from corresponding offset.
-                to_replay[str(worker_id_to_replay)][1][channel] = to_replay_for_snapshot[channel]
+            for op_name in self.recovery_graph_root_set[worker_id].keys():
+                to_replay_for_snapshot = self.messages_to_replay[worker_id][op_name][self.recovery_graph_root_set[worker_id][op_name]]
+                for channel in to_replay_for_snapshot.keys():
+                    # Split the channel string for its components (example: map_filter_27)
+                    snt_op, rec_op, channel_no = channel.split('_')
+                    # Divide the channel number by the amount of partitions of the receiving operator (in the example case: 27 / no_partitions(filter) )
+                    snt_op_partition = math.floor(int(channel_no) / len(self.partitions_to_ids[rec_op].keys()))
+                    # We now have the partition of the sending operator (example: map), so we can look up which worker_id hosts this partition
+                    worker_id_to_replay = self.partitions_to_ids[snt_op][str(snt_op_partition)]
+                    # The hosting worker_id should replay the channel in question from the last offset received for this checkpoint
+                    # In case of our example: the worker that hosts the calculated map partition should replay messages sent on channel map_filter_27 from corresponding offset.
+                    to_replay[str(worker_id_to_replay)][snt_op][1][channel] = to_replay_for_snapshot[channel]
         return to_replay
 
     async def test_snapshot_recovery(self):
@@ -144,25 +151,29 @@ class CoordinatorService:
         new_messages_received_intervals = {}
         new_messages_sent_intervals = {}
         for worker_id in root_set.keys():
-            # Build new recovery graph containing only root set
-            new_recovery_graph[(worker_id, root_set[worker_id])] = set()
-            # Set for every worker_id a new list of timestamps containing only the root set timestamp
-            self.snapshot_timestamps[worker_id] = [root_set[worker_id]]
-            # Keep only the messages to replay for the root set
-            new_messages_to_replay[worker_id] = {root_set[worker_id]: self.messages_to_replay[worker_id][root_set[worker_id]]}
-            # Remove all unnecessary info from the received and sent intervals
+            new_messages_to_replay[worker_id] = {}
             new_messages_received_intervals[worker_id] = {}
             new_messages_sent_intervals[worker_id] = {}
-            for channel in self.messages_received_intervals[worker_id].keys():
-                new_messages_received_intervals[worker_id][channel] = []
-                for offset_and_timestamp in self.messages_received_intervals[worker_id][channel]:
-                    if offset_and_timestamp[1] == root_set[worker_id]:
-                        new_messages_received_intervals[worker_id][channel].append(offset_and_timestamp)
-            for channel in self.messages_sent_intervals[worker_id].keys():
-                new_messages_sent_intervals[worker_id][channel] = []
-                for offset_and_timestamp in self.messages_sent_intervals[worker_id][channel]:
-                    if offset_and_timestamp[1] == root_set[worker_id]:
-                        new_messages_sent_intervals[worker_id][channel].append(offset_and_timestamp)
+            for op_name in root_set[worker_id].keys():
+                # Build new recovery graph containing only root set
+                new_recovery_graph[(worker_id, op_name, root_set[worker_id][op_name])] = set()
+                # Set for every worker_id a new list of timestamps containing only the root set timestamp
+                self.snapshot_timestamps[worker_id][op_name] = [root_set[worker_id][op_name]]
+                # Keep only the messages to replay for the root set
+                new_messages_to_replay[worker_id][op_name] = {root_set[worker_id][op_name]: self.messages_to_replay[worker_id][op_name][root_set[worker_id][op_name]]}
+                # Remove all unnecessary info from the received and sent intervals
+                new_messages_received_intervals[worker_id][op_name] = {}
+                new_messages_sent_intervals[worker_id][op_name] = {}
+                for channel in self.messages_received_intervals[worker_id][op_name].keys():
+                    new_messages_received_intervals[worker_id][op_name][channel] = []
+                    for offset_and_timestamp in self.messages_received_intervals[worker_id][op_name][channel]:
+                        if offset_and_timestamp[1] == root_set[worker_id][op_name]:
+                            new_messages_received_intervals[worker_id][op_name][channel].append(offset_and_timestamp)
+                for channel in self.messages_sent_intervals[worker_id][op_name].keys():
+                    new_messages_sent_intervals[worker_id][op_name][channel] = []
+                    for offset_and_timestamp in self.messages_sent_intervals[worker_id][op_name][channel]:
+                        if offset_and_timestamp[1] == root_set[worker_id][op_name]:
+                            new_messages_sent_intervals[worker_id][op_name][channel].append(offset_and_timestamp)
         # Set the new recovery graph and messages to replay
         self.recovery_graph = new_recovery_graph
         self.messages_to_replay = new_messages_to_replay
@@ -201,49 +212,51 @@ class CoordinatorService:
             for worker_id_snt in self.messages_sent_intervals.keys():
                 if worker_id_rec==worker_id_snt:
                     continue
-                for channel in self.messages_received_intervals[worker_id_rec].keys():
-                    if channel in self.messages_sent_intervals[worker_id_snt].keys():
-                        rec_intervals = self.messages_received_intervals[worker_id_rec][channel]
-                        snt_intervals = self.messages_sent_intervals[worker_id_snt][channel]
-                        rec_index = 1
-                        snt_index = 1
-                        rec_interval_start = rec_intervals[0][0]
-                        snt_interval_start = snt_intervals[0][0]
-                        while rec_index < len(rec_intervals) and snt_index < len(snt_intervals):
-                            rec_interval_end = rec_intervals[rec_index][0]
-                            snt_interval_end = snt_intervals[snt_index][0]
+                for rec_op in self.messages_received_intervals[worker_id_rec].keys():
+                    for snt_op in self.messages_sent_intervals[worker_id_snt].keys():
+                        for channel in self.messages_received_intervals[worker_id_rec][rec_op].keys():
+                            if channel in self.messages_sent_intervals[worker_id_snt][snt_op].keys():
+                                rec_intervals = self.messages_received_intervals[worker_id_rec][rec_op][channel]
+                                snt_intervals = self.messages_sent_intervals[worker_id_snt][snt_op][channel]
+                                rec_index = 1
+                                snt_index = 1
+                                rec_interval_start = rec_intervals[0][0]
+                                snt_interval_start = snt_intervals[0][0]
+                                while rec_index < len(rec_intervals) and snt_index < len(snt_intervals):
+                                    rec_interval_end = rec_intervals[rec_index][0]
+                                    snt_interval_end = snt_intervals[snt_index][0]
 
-                            # If there is no overlap, increase the lower interval and continue.
-                            if rec_interval_end < snt_interval_start:
-                                rec_interval_start = rec_interval_end
-                                rec_index += 1
-                                continue
-                            elif snt_interval_end < rec_interval_start:
-                                snt_interval_start = snt_interval_end
-                                snt_index += 1
-                                continue
-                            
-                            # If there is overlap in the intervals an edge should be created from the node at the beginning of the sent interval
-                            # To the node at the end of the received interval.
-                            self.recovery_graph[(worker_id_snt, snt_intervals[snt_index-1][1])].add((worker_id_rec, rec_intervals[rec_index][1]))
+                                    # If there is no overlap, increase the lower interval and continue.
+                                    if rec_interval_end < snt_interval_start:
+                                        rec_interval_start = rec_interval_end
+                                        rec_index += 1
+                                        continue
+                                    elif snt_interval_end < rec_interval_start:
+                                        snt_interval_start = snt_interval_end
+                                        snt_index += 1
+                                        continue
+                                    
+                                    # If there is overlap in the intervals an edge should be created from the node at the beginning of the sent interval
+                                    # To the node at the end of the received interval.
+                                    self.recovery_graph[(worker_id_snt, snt_op, snt_intervals[snt_index-1][1])].add((worker_id_rec, rec_op, rec_intervals[rec_index][1]))
 
-                            # Increase the lowest interval end
-                            if rec_interval_end == snt_interval_end:
-                                rec_interval_start = rec_interval_end
-                                snt_interval_start = snt_interval_end
-                                rec_index += 1
-                                snt_index += 1
-                            elif rec_interval_end < snt_interval_end:
-                                rec_interval_start = rec_interval_end
-                                rec_index += 1
-                            else:
-                                snt_interval_start = snt_interval_end
-                                snt_index += 1
-                        
-                        # Now arrived at the last node, meaning that if the received is bigger than the sent, there are orphan messages.
-                        # This means that an edge should be added from the last sent to the last received.
-                        if rec_intervals[len(rec_intervals) - 1][0] > snt_intervals[len(snt_intervals) - 1][0]:
-                            self.recovery_graph[(worker_id_snt, snt_intervals[len(snt_intervals) - 1][1])].add((worker_id_rec, rec_intervals[len(rec_intervals) - 1][1]))
+                                    # Increase the lowest interval end
+                                    if rec_interval_end == snt_interval_end:
+                                        rec_interval_start = rec_interval_end
+                                        snt_interval_start = snt_interval_end
+                                        rec_index += 1
+                                        snt_index += 1
+                                    elif rec_interval_end < snt_interval_end:
+                                        rec_interval_start = rec_interval_end
+                                        rec_index += 1
+                                    else:
+                                        snt_interval_start = snt_interval_end
+                                        snt_index += 1
+                                
+                                # Now arrived at the last node, meaning that if the received is bigger than the sent, there are orphan messages.
+                                # This means that an edge should be added from the last sent to the last received.
+                                if rec_intervals[len(rec_intervals) - 1][0] > snt_intervals[len(snt_intervals) - 1][0]:
+                                    self.recovery_graph[(worker_id_snt, snt_op, snt_intervals[len(snt_intervals) - 1][1])].add((worker_id_rec, rec_op, rec_intervals[len(rec_intervals) - 1][1]))
 
     # Processes the information sent from the worker about a snapshot.
     async def process_snapshot_information(self, message):
@@ -324,7 +337,7 @@ class CoordinatorService:
                         await self.process_snapshot_information(message)
                     case 'WORKER_FAILED':
                         logging.warning('Worker failed! Find recovery line.')
-                        #await self.test_snapshot_recovery()
+                        await self.test_snapshot_recovery()
                     case _:
                         # Any other message type
                         logging.error(f"COORDINATOR SERVER: Non supported message type: {message_type}")
