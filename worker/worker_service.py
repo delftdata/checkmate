@@ -62,7 +62,7 @@ class Worker:
             secret_key=MINIO_SECRET_KEY, secure=False
         )
         self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
-        self.last_snapshot_timestamp = time.time_ns() // 1000000
+        self.last_snapshot_timestamp = {}
         self.total_partitions_per_operator = {}
         self.last_messages_sent = {}
         self.last_kafka_consumed = {}
@@ -134,7 +134,7 @@ class Worker:
                 data=io.BytesIO(bytes_file),
                 length=len(bytes_file)
             )
-            self.last_snapshot_timestamp = time.time_ns() // 1000000
+            self.last_snapshot_timestamp[operator] = time.time_ns() // 1000000
             coordinator_info = {}
             coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
             coordinator_info['last_messages_sent'] = last_messages_sent
@@ -356,6 +356,7 @@ class Worker:
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator = message
         for op in self.total_partitions_per_operator.keys():
             self.last_messages_processed[op] = {}
+            self.last_snapshot_timestamp[op] = time.time_ns() // 1000000
         await self.networking.set_total_partitions_per_operator(self.total_partitions_per_operator)
         del self.peers[self.id]
         operator: Operator
@@ -375,19 +376,23 @@ class Worker:
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
             await asyncio.sleep(checkpoint_interval)
-            logging.warning(f'current state: {self.local_state.data}')
-            for key in self.total_partitions_per_operator.keys():
-                await self.take_snapshot(key)
+            if isinstance(self.local_state, InMemoryOperatorState):
+                logging.warning(f'current state: {self.local_state.data}')
+            for operator in self.total_partitions_per_operator.keys():
+                await self.take_snapshot(operator)
 
-#    async def communication_induced_checkpointing(self, checkpoint_interval):
-#        while True:
-#            asyncio.sleep(checkpoint_interval)
-#            current_time = time.time_ns // 1000000
-#            if current_time > self.last_snapshot_timestamp + checkpoint_interval*1000:
-#                await self.take_snapshot()
-#            else:
-#                asyncio.sleep(ceil((self.last_snapshot_timestamp + checkpoint_interval*1000 - current_time) / 1000))
-            
+    async def communication_induced_checkpointing(self, checkpoint_interval):
+        for operator in self.total_partitions_per_operator.keys():
+            self.create_task(self.cic_per_operator(checkpoint_interval, operator))
+
+    async def cic_per_operator(self, checkpoint_interval, operator):
+        while True:
+            current_time = time.time_ns() // 1000000
+            if current_time > self.last_snapshot_timestamp[operator] + (checkpoint_interval*1000):
+                await self.take_snapshot(operator)
+                await asyncio.sleep(checkpoint_interval)
+            else:
+                await asyncio.sleep(ceil(((self.last_snapshot_timestamp[operator] + (checkpoint_interval*1000)) - current_time) / 1000))
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
