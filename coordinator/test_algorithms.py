@@ -15,45 +15,60 @@ dummy_coordinator = CoordinatorService()
 # Create the components for a basic recovery
 
 basic_recovery_graph = {
-    ('1', 0): set([('1', 1)]),
-    ('2', 0): set([('1', 1)]),
-    ('1', 1): set([('1', 2)]),
-    ('1', 2): set(),
+    ('1', 'filter', 0): set([('1', 'filter', 1)]),
+    ('1', 'filter', 2): set(),
+    ('1', 'map', 0): set([('1', 'map', 1)]),
+    ('1', 'filter', 1): set([('1', 'filter', 2)]),
+    ('1', 'map', 1): set(),
+    ('2', 'filter', 0): set([('1', 'filter', 1)]),
+    ('2', 'map', 0): set(),
 }
 
 basic_recovery_graph_root_set = {
-    '1': 2,
-    '2': 0
+    '1': {
+        'filter': 2,
+        'map': 1
+    },
+    '2': {
+        'filter': 0,
+        'map': 0
+    }
 }
 
 basic_recovery_graph_snapshot_timestamps = {
-    '1': [0, 1, 2],
-    '2': [0]
+    '1': {
+        'filter': [0, 1, 2],
+        'map': [0, 1]
+    },
+    '2': {
+        'filter': [0],
+        'map': [0]
+    }
 }
 
 # Test find_reachable_nodes
 @pytest.mark.asyncio
 async def test_find_reachable_nodes_empty():
     dummy_coordinator.recovery_graph = basic_recovery_graph
-    node = ('1', 2)
-    result = await dummy_coordinator.find_reachable_nodes(node, 4)
+    node = ('2', 'map', 0)
+    result = await dummy_coordinator.find_reachable_nodes(node, 7)
     expected_result = set()
     assert result == expected_result
 
 @pytest.mark.asyncio
 async def test_find_reachable_nodes_non_empty():
     dummy_coordinator.recovery_graph = basic_recovery_graph
-    node = ('1', 1)
-    result = await dummy_coordinator.find_reachable_nodes(node, 4)
-    expected_result = set([('1', 2)])
+    node = ('1', 'map', 0)
+    result = await dummy_coordinator.find_reachable_nodes(node, 7)
+    expected_result = set([('1', 'map', 1)])
     assert result == expected_result
 
 @pytest.mark.asyncio
 async def test_find_reachable_nodes_recursion():
     dummy_coordinator.recovery_graph = basic_recovery_graph
-    node = ('2', 0)
-    result = await dummy_coordinator.find_reachable_nodes(node, 4)
-    expected_result = set([('1', 1), ('1', 2)])
+    node = ('1', 'filter', 0)
+    result = await dummy_coordinator.find_reachable_nodes(node, 7)
+    expected_result = set([('1', 'filter', 1), ('1', 'filter', 2)])
     assert result == expected_result
 
 # test find_recovery_line (not that this will fail if find_reachable_nodes fails)
@@ -62,27 +77,54 @@ async def test_find_recovery_line():
     dummy_coordinator.recovery_graph = basic_recovery_graph
     dummy_coordinator.recovery_graph_root_set = basic_recovery_graph_root_set
     dummy_coordinator.snapshot_timestamps = basic_recovery_graph_snapshot_timestamps
+    expected_recovery_line = {
+        '1': {
+            'filter': 0,
+            'map': 1
+        },
+        '2': {
+            'filter': 0,
+            'map': 0
+        }
+    }
     await dummy_coordinator.find_recovery_line()
-    assert dummy_coordinator.recovery_graph_root_set == {'1': 0, '2': 0}
+    assert dummy_coordinator.recovery_graph_root_set == expected_recovery_line
 
 # Create a scenario without any orphan messages
 
 no_orphan_recovery_graph = {
-    ('1', 0): set([('1', 1)]),
-    ('2', 0): set([('2', 1)]),
-    ('1', 1): set([('1', 2)]),
-    ('1', 2): set(),
-    ('2', 1): set()
+    ('1', 'filter', 0): set([('1', 'filter', 1)]),
+    ('1', 'filter', 1): set([('1', 'filter', 2)]),
+    ('1', 'filter', 2): set(),
+    ('1', 'map', 0): set([('1', 'map', 1)]),
+    ('1', 'map', 1): set([('1', 'map', 2)]),
+    ('1', 'map', 2): set(),
+    ('2', 'filter', 0): set([('2', 'filter', 1)]),
+    ('2', 'filter', 1): set(),
+    ('2', 'map', 0): set([('2', 'map', 1)]),
+    ('2', 'map', 1): set()
 }
 
 no_orphan_recovery_graph_root_set = {
-    '1': 2,
-    '2': 1
+    '1': {
+        'filter': 2,
+        'map': 2
+    },
+    '2': {
+        'filter': 1,
+        'map': 1
+    }
 }
 
 no_orphan_recovery_graph_snapshot_timestamps = {
-    '1': [0, 1, 2],
-    '2': [0, 1]
+    '1': {
+        'filter': [0, 1, 2],
+        'map': [0, 1, 2]
+    },
+    '2': {
+        'filter': [0, 1],
+        'map': [0, 1]
+    }
 }
 
 @pytest.mark.asyncio
@@ -90,27 +132,56 @@ async def test_find_recovery_line_no_orphan():
     dummy_coordinator.recovery_graph = no_orphan_recovery_graph
     dummy_coordinator.recovery_graph_root_set = no_orphan_recovery_graph_root_set
     dummy_coordinator.snapshot_timestamps = no_orphan_recovery_graph_snapshot_timestamps
+    expected_root_set = {
+        '1': {
+            'filter': 2,
+            'map': 2
+        },
+        '2': {
+            'filter': 1,
+            'map': 1
+        }
+    }
     await dummy_coordinator.find_recovery_line()
-    assert dummy_coordinator.recovery_graph_root_set == {'1': 2, '2': 1}
+    assert dummy_coordinator.recovery_graph_root_set == expected_root_set
 
 # Create a domino effect scenario
 
 domino_recovery_graph = {
-    ('1', 0): set([('1', 1)]),
-    ('2', 0): set([('2', 1), ('1', 1)]),
-    ('1', 1): set([('1', 2), ('2', 1)]),
-    ('1', 2): set(),
-    ('2', 1): set([('1', 2)])
+    ('1', 'filter', 0): set([('2', 'filter', 1), ('1', 'filter', 1)]),
+    ('1', 'filter', 1): set([('1', 'filter', 2)]),
+    ('1', 'filter', 2): set([('1', 'map', 1)]),
+    ('1', 'map', 0): set([('1', 'map', 1)]),
+    ('1', 'map', 1): set([('1', 'map', 2), ('2', 'filter', 1)]),
+    ('1', 'map', 2): set(),
+    ('2', 'filter', 0): set([('2', 'filter', 1)]),
+    ('2', 'filter', 1): set([('2', 'map', 1), ('1', 'filter', 1), ('2', 'filter', 2)]),
+    ('2', 'filter', 2): set(),
+    ('2', 'map', 0): set([('1', 'map', 1), ('2', 'map', 1)]),
+    ('2', 'map', 1): set([('2', 'map', 2)]),
+    ('2', 'map', 2): set()
 }
 
 domino_recovery_graph_root_set = {
-    '1': 2,
-    '2': 1
+    '1': {
+        'filter': 2,
+        'map': 2
+    },
+    '2': {
+        'filter': 2,
+        'map': 2
+    }
 }
 
 domino_recovery_graph_snapshot_timestamps = {
-    '1': [0, 1, 2],
-    '2': [0, 1]
+    '1': {
+        'filter': [0, 1, 2],
+        'map': [0, 1, 2]
+    },
+    '2': {
+        'filter': [0, 1, 2],
+        'map': [0, 1, 2]
+    }
 }
 
 @pytest.mark.asyncio
@@ -118,8 +189,18 @@ async def test_find_recovery_line_domino():
     dummy_coordinator.recovery_graph = domino_recovery_graph
     dummy_coordinator.recovery_graph_root_set = domino_recovery_graph_root_set
     dummy_coordinator.snapshot_timestamps = domino_recovery_graph_snapshot_timestamps
+    expected_root_set = {
+        '1': {
+            'filter': 0,
+            'map': 0
+        },
+        '2': {
+            'filter': 0,
+            'map': 0
+        }
+    }
     await dummy_coordinator.find_recovery_line()
-    assert dummy_coordinator.recovery_graph_root_set == {'1': 0, '2': 0}
+    assert dummy_coordinator.recovery_graph_root_set == expected_root_set
 
 # test add_edges_between_workers
 
@@ -128,14 +209,17 @@ dummy_coordinator.recovery_graph_root_set = {}
 dummy_coordinator.snapshot_timestamps = {}
 
 recovery_graph_no_messages = {
-    ('1', 0): set([('1', 1)]),
-    ('1', 1): set([('1', 2)]),
-    ('1', 2): set([('1', 3)]),
-    ('1', 3): set(),
-    ('2', 0): set([('2', 1)]),
-    ('2', 1): set([('2', 2)]),
-    ('2', 2): set([('2', 3)]),
-    ('2', 3): set()
+    ('1', 'filter', 0): set([('1', 'filter', 1)]),
+    ('1', 'filter', 1): set([('1', 'filter', 2)]),
+    ('1', 'filter', 2): set(),
+    ('1', 'map', 0): set([('1', 'map', 1)]),
+    ('1', 'map', 1): set([('1', 'map', 2)]),
+    ('1', 'map', 2): set(),
+    ('2', 'filter', 0): set([('2', 'filter', 1)]),
+    ('2', 'filter', 1): set(),
+    ('2', 'map', 0): set([('2', 'map', 1)]),
+    ('2', 'map', 1): set([('2', 'map', 2)]),
+    ('2', 'map', 2): set()
 }
 
 # Messages sent/received intervals will differ per test, so they are defined on test level
@@ -143,10 +227,12 @@ recovery_graph_no_messages = {
 @pytest.mark.asyncio
 async def test_simple_edges():
     dummy_coordinator.recovery_graph = recovery_graph_no_messages
-    # Msg received/sent contans the following mapping; workerid > channel > ordered list of (offset, timestamp)
+    # Msg received/sent contans the following mapping; workerid > operator > channel > ordered list of (offset, timestamp)
     simple_msg_recieved = {
         '1': {
-            'channel1': [(0, 0), (20, 1)]
+            'filter': {
+                'channel1': [(0, 0), (20, 1)]
+            }
         },
         '2': {
 
@@ -157,7 +243,9 @@ async def test_simple_edges():
 
         },
         '2': {
-            'channel1': [(0, 0), (18, 1), (25, 2)]
+            'map': {
+                'channel1': [(0, 0), (18, 1), (25, 2)]
+            }
         }
     }
     # This simple case should add an edge from (2,0) to (1,1)
@@ -166,27 +254,33 @@ async def test_simple_edges():
     await dummy_coordinator.add_edges_between_workers()
 
     expected_result = {
-        ('1', 0): set([('1', 1)]),
-        ('1', 1): set([('1', 2)]),
-        ('1', 2): set([('1', 3)]),
-        ('1', 3): set(),
-        ('2', 0): set([('1', 1), ('2', 1)]),
-        ('2', 1): set([('1', 1), ('2', 2)]),
-        ('2', 2): set([('2', 3)]),
-        ('2', 3): set()
+        ('1', 'filter', 0): set([('1', 'filter', 1)]),
+        ('1', 'filter', 1): set([('1', 'filter', 2)]),
+        ('1', 'filter', 2): set(),
+        ('1', 'map', 0): set([('1', 'map', 1)]),
+        ('1', 'map', 1): set([('1', 'map', 2)]),
+        ('1', 'map', 2): set(),
+        ('2', 'filter', 0): set([('2', 'filter', 1)]),
+        ('2', 'filter', 1): set(),
+        ('2', 'map', 0): set([('1', 'filter', 1), ('2', 'map', 1)]),
+        ('2', 'map', 1): set([('1', 'filter', 1), ('2', 'map', 2)]),
+        ('2', 'map', 2): set()
     }
 
     assert expected_result == dummy_coordinator.recovery_graph
 
 same_interval_recovery_graph = {
-    ('1', 0): set([('1', 1)]),
-    ('1', 1): set([('1', 2)]),
-    ('1', 2): set([('1', 3)]),
-    ('1', 3): set(),
-    ('2', 0): set([('2', 1)]),
-    ('2', 1): set([('2', 2)]),
-    ('2', 2): set([('2', 3)]),
-    ('2', 3): set()
+    ('1', 'filter', 0): set([('1', 'filter', 1)]),
+    ('1', 'filter', 1): set([('1', 'filter', 2)]),
+    ('1', 'filter', 2): set(),
+    ('1', 'map', 0): set([('1', 'map', 1)]),
+    ('1', 'map', 1): set([('1', 'map', 2)]),
+    ('1', 'map', 2): set(),
+    ('2', 'filter', 0): set([('2', 'filter', 1)]),
+    ('2', 'filter', 1): set(),
+    ('2', 'map', 0): set([('2', 'map', 1)]),
+    ('2', 'map', 1): set([('2', 'map', 2)]),
+    ('2', 'map', 2): set()
 }
 
 @pytest.mark.asyncio
@@ -196,7 +290,9 @@ async def test_same_interval_ends():
     # If the interval borders are exactly the same, only edges between those intervals should be added.
     same_interval_rec = {
         '1': {
-            'channel1': [(0, 0), (20, 1), (25, 2)]
+            'filter': {
+                'channel1': [(0, 0), (20, 1), (25, 2)]
+            }
         },
         '2': {
 
@@ -207,7 +303,9 @@ async def test_same_interval_ends():
 
         },
         '2': {
-            'channel1': [(0, 0), (20, 1), (25, 2)]
+            'map': {
+                'channel1': [(0, 0), (20, 1), (25, 2)]
+            }
         }
     }
 
@@ -216,14 +314,17 @@ async def test_same_interval_ends():
     await dummy_coordinator.add_edges_between_workers()
 
     same_interval_res = {
-        ('1', 0): set([('1', 1)]),
-        ('1', 1): set([('1', 2)]),
-        ('1', 2): set([('1', 3)]),
-        ('1', 3): set(),
-        ('2', 0): set([('1', 1), ('2', 1)]),
-        ('2', 1): set([('1', 2), ('2', 2)]),
-        ('2', 2): set([('2', 3)]),
-        ('2', 3): set()
+        ('1', 'filter', 0): set([('1', 'filter', 1)]),
+        ('1', 'filter', 1): set([('1', 'filter', 2)]),
+        ('1', 'filter', 2): set(),
+        ('1', 'map', 0): set([('1', 'map', 1)]),
+        ('1', 'map', 1): set([('1', 'map', 2)]),
+        ('1', 'map', 2): set(),
+        ('2', 'filter', 0): set([('2', 'filter', 1)]),
+        ('2', 'filter', 1): set(),
+        ('2', 'map', 0): set([('1', 'filter', 1), ('2', 'map', 1)]),
+        ('2', 'map', 1): set([('1', 'filter', 2), ('2', 'map', 2)]),
+        ('2', 'map', 2): set()
     }
 
     assert same_interval_res == dummy_coordinator.recovery_graph
@@ -235,43 +336,77 @@ async def test_clear_checkpoint_details():
     # Mock root_set, messages_to_replay, message_received_intervals and message_sent_intervals
 
     clear_cp_recovery_graph = {
-        ('1', 0): set([('1', 1)]),
-        ('1', 1): set(),
-        ('2', 0): set([('2', 1)]),
-        ('2', 1): set()
+        ('1', 'filter', 0): set([('1', 'filter', 1)]),
+        ('1', 'filter', 1): set(),
+        ('1', 'map', 0): set([('1', 'map', 1)]),
+        ('1', 'map', 1): set(),
+        ('2', 'filter', 0): set([('2', 'filter', 1)]),
+        ('2', 'filter', 1): set(),
+        ('2', 'map', 0): set([('2', 'map', 1)]),
+        ('2', 'map', 1): set()
     }
 
     clear_cp_root_set = {
-        '1': 1,
-        '2': 1
+        '1': {
+            'filter': 1,
+            'map': 1
+        },
+        '2': {
+            'filter': 1,
+            'map': 1
+        }
     }
 
     clear_cp_msg_to_replay = {
         '1': {
-            0: [],
-            1: [0, 1]
+            'map': {
+                0: [],
+                1: []
+            },
+            'filter': {
+                0: [],
+                1: [0, 1]
+            }
         },
         '2': {
-            0: [],
-            1: [0, 1]
+            'map': {
+                0: [],
+                1: []
+            },
+            'filter': {
+                0: [],
+                1: [0, 1]
+            }
         }
     }
 
     clear_cp_msg_rec_interval = {
         '1': {
-            'channel1': [(20, 0), (37, 1)]
+            'filter': {},
+            'map': {
+                'channel1': [(20, 0), (37, 1)]
+            }
         },
         '2': {
-            'channel2': [(12, 0), (25, 1)]
+            'filter': {},
+            'map': {
+                'channel2': [(12, 0), (25, 1)]
+            }
         }
     }
 
     clear_cp_msg_snt_interval = {
         '1': {
-            'channel2': [(17, 0), (25, 1)]
+            'map': {},
+            'filter': {
+                'channel2': [(17, 0), (25, 1)]
+            }
         },
         '2': {
-            'channel1': [(28, 0), (37, 1)]
+            'map': {},
+            'filter': {
+                'channel1': [(28, 0), (37, 1)]
+            }
         }
     }
 
@@ -284,34 +419,58 @@ async def test_clear_checkpoint_details():
     await dummy_coordinator.clear_checkpoint_details()
 
     graph_after_clear = {
-        ('1', 1): set(),
-        ('2', 1): set()
+        ('1', 'filter', 1): set(),
+        ('1', 'map', 1): set(),
+        ('2', 'filter', 1): set(),
+        ('2', 'map', 1): set()
     }
 
     msg_rec_after_clear = {
         '1': {
-            'channel1': [(37, 1)]
+            'filter': {},
+            'map': {
+                'channel1': [(37, 1)]
+            }
         },
         '2': {
-            'channel2': [(25, 1)]
+            'filter': {},
+            'map': {
+                'channel2': [(25, 1)]
+            }
         }
     }
 
     msg_snt_after_clear = {
         '1': {
-            'channel2': [(25, 1)]
+            'map': {},
+            'filter': {
+                'channel2': [(25, 1)]
+            }
         },
         '2': {
-            'channel1': [(37, 1)]
+            'map': {},
+            'filter': {
+                'channel1': [(37, 1)]
+            }
         }
     }
 
     msg_to_replay_after_clear = {
         '1': {
-            1: [0, 1]
+            'map': {
+                1: []
+            },
+            'filter': {
+                1: [0, 1]
+            }
         },
         '2': {
-            1: [0, 1]
+            'map': {
+                1: []
+            },
+            'filter': {
+                1: [0, 1]
+            }
         }
     }
 
@@ -324,16 +483,22 @@ async def test_clear_checkpoint_details():
 async def test_find_channels_to_replay():
     # Mock recovery graph root set, messages_to_replay and partitions_to_ids
     simple_root_set = {
-        '1': 3,
-        '2': 2
+        '1': {
+            'filter': 3,
+            'map': 2
+        },
+        '2': {
+            'filter': 3,
+            'map': 1
+        }
     }
 
     partitions_to_ids = {
-        'operator1': {
+        'filter': {
             '0': 1,
             '1': 2
         },
-        'operator2': {
+        'map': {
             '0': 1,
             '1': 2
         }
@@ -346,13 +511,23 @@ async def test_find_channels_to_replay():
     # thus our formula looks like; 1 * 2 + 0 = 2, thus the channel_no in msg_to_replay should be 2.
     msg_to_replay = {
         '1': {
-            3: {
-                'operator1_operator2_2': 12
+            'filter': {
+                3: {
+                    'filter_map_2': 12
+                }
+            },
+            'map': {
+                2: {}
             }
         },
         '2': {
-            2: {
-                'operator1_operator2_1': 17
+            'filter': {
+                3: {
+                    'filter_map_1': 17
+                }
+            },
+            'map': {
+                1: {}
             }
         }
     }
@@ -366,12 +541,14 @@ async def test_find_channels_to_replay():
     # We created the mock such that the channels to replayed for both snapshots are sent by the other worker_id
     # Thus the channels in msg_to_replay should simply be swapped in this case.
     expected_result = {
-        '1': (3, {
-            'operator1_operator2_1': 17
-        }),
-        '2': (2, {
-            'operator1_operator2_2': 12
-        })
+        '1': {
+            'filter': (3, {'filter_map_1': 17}),
+            'map': (2, {})
+        },
+        '2': {
+            'filter': (3, {'filter_map_2': 12}),
+            'map': (1, {})
+        }
     }
 
     assert result == expected_result
