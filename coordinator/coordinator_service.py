@@ -77,7 +77,7 @@ class CoordinatorService:
             # First iterate to create a set of all reachable nodes in the graph from the root set (mark all reachable nodes)
             for worker_id in self.recovery_graph_root_set.keys():
                 for op_name in self.recovery_graph_root_set[worker_id].keys():
-                    snapshot_timestamp = self.recovery_graph_root_set[worker_id][op_name]
+                    snapshot_timestamp = int(self.recovery_graph_root_set[worker_id][op_name])
                     marked_nodes = marked_nodes.union(await self.find_reachable_nodes((worker_id, op_name, snapshot_timestamp), len(self.recovery_graph.keys())))
 
             # If node in the root set is marked, replace it with an earlier checkpoint
@@ -238,7 +238,7 @@ class CoordinatorService:
                                     
                                     # If there is overlap in the intervals an edge should be created from the node at the beginning of the sent interval
                                     # To the node at the end of the received interval.
-                                    self.recovery_graph[(worker_id_snt, snt_op, snt_intervals[snt_index-1][1])].add((worker_id_rec, rec_op, rec_intervals[rec_index][1]))
+                                    self.recovery_graph[(worker_id_snt, snt_op, int(snt_intervals[snt_index-1][1]))].add((worker_id_rec, rec_op, int(rec_intervals[rec_index][1])))
 
                                     # Increase the lowest interval end
                                     if rec_interval_end == snt_interval_end:
@@ -256,7 +256,7 @@ class CoordinatorService:
                                 # Now arrived at the last node, meaning that if the received is bigger than the sent, there are orphan messages.
                                 # This means that an edge should be added from the last sent to the last received.
                                 if rec_intervals[len(rec_intervals) - 1][0] > snt_intervals[len(snt_intervals) - 1][0]:
-                                    self.recovery_graph[(worker_id_snt, snt_op, snt_intervals[len(snt_intervals) - 1][1])].add((worker_id_rec, rec_op, rec_intervals[len(rec_intervals) - 1][1]))
+                                    self.recovery_graph[(worker_id_snt, snt_op, int(snt_intervals[len(snt_intervals) - 1][1]))].add((worker_id_rec, rec_op, int(rec_intervals[len(rec_intervals) - 1][1])))
 
     # Processes the information sent from the worker about a snapshot.
     async def process_snapshot_information(self, message):
@@ -284,7 +284,7 @@ class CoordinatorService:
         snapshot_number = self.snapshot_timestamps[snapshot_name[1]][snapshot_name[2]].index(int(snapshot_name[3]))
         if snapshot_number > 0:
             # Look up the previous snapshot timestamp and add an edge from that snapshot to the one we are currently processing.
-            self.recovery_graph[(snapshot_name[1], snapshot_name[2], self.snapshot_timestamps[snapshot_name[1]][snapshot_name[2]][snapshot_number-1])].add((snapshot_name[1], snapshot_name[2], snapshot_name[3]))
+            self.recovery_graph[(snapshot_name[1], snapshot_name[2], int(self.snapshot_timestamps[snapshot_name[1]][snapshot_name[2]][snapshot_number-1]))].add((snapshot_name[1], snapshot_name[2], int(snapshot_name[3])))
 
     def init_snapshot_minio_bucket(self):
         try:
