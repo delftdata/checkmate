@@ -90,7 +90,7 @@ class CoordinatorService:
                             logging.error("Even the first snapshot got marked, this should not be possible. Index smaller then zero.")
                         else:
                             # Replace it with the checkpoint before the marked one and repeat the process.
-                            self.recovery_graph_root_set[worker_id][op_name] = self.snapshot_timestamps[worker_id][op_name][index]
+                            self.recovery_graph_root_set[worker_id][op_name] = int(self.snapshot_timestamps[worker_id][op_name][index])
                             root_set_changed = True
 
 
@@ -120,10 +120,10 @@ class CoordinatorService:
             to_replay[worker_id] = {}
             for op_name in self.recovery_graph_root_set[worker_id].keys():
             # Initiate a corresponding tuple for every worker_id, op_name. Tuple contains (snapshot_timestamp, {channel: offset})
-                to_replay[worker_id][op_name] = (self.recovery_graph_root_set[worker_id][op_name], {})
+                to_replay[worker_id][op_name] = (int(self.recovery_graph_root_set[worker_id][op_name]), {})
         for worker_id in self.recovery_graph_root_set.keys():
             for op_name in self.recovery_graph_root_set[worker_id].keys():
-                to_replay_for_snapshot = self.messages_to_replay[worker_id][op_name][self.recovery_graph_root_set[worker_id][op_name]]
+                to_replay_for_snapshot = self.messages_to_replay[worker_id][op_name][int(self.recovery_graph_root_set[worker_id][op_name])]
                 for channel in to_replay_for_snapshot.keys():
                     # Split the channel string for its components (example: map_filter_27)
                     snt_op, rec_op, channel_no = channel.split('_')
