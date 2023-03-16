@@ -163,16 +163,11 @@ class Worker:
             if operator_name in self.last_kafka_consumed.keys():
                 if 'last_kafka_consumed' in deserialized_data.keys():
                     self.last_kafka_consumed[operator_name] = deserialized_data['last_kafka_consumed']
+                    for partition in self.last_kafka_consumed[operator_name].keys():
+                        topic_partition_to_reset = TopicPartition(operator_name, int(partition))
+                        self.kafka_consumer.seek(topic_partition_to_reset, (self.last_kafka_consumed[operator_name][partition] + 1))
                 else:
-                    logging.info('last_kafka_consumed not in restore message, setting to 0')
-                    kafka_consumed_zero = {}
-                    for (op, part) in self.registered_operators.keys():
-                        if op == operator_name:
-                            kafka_consumed_zero[part] = 0
-                    self.last_kafka_consumed[operator_name] = kafka_consumed_zero
-                for partition in self.last_kafka_consumed[operator_name].keys():
-                    topic_partition_to_reset = TopicPartition(operator_name, int(partition))
-                    self.kafka_consumer.seek(topic_partition_to_reset, (self.last_kafka_consumed[operator_name][partition] + 1))
+                    logging.warning('last_kafka_consumed not in restore message')
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
 
