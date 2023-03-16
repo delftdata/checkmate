@@ -122,7 +122,7 @@ class Worker:
                 snapshot_data['last_messages_sent'] = last_messages_sent
                 snapshot_data['last_messages_processed'] = self.last_messages_processed[operator]
                 if operator in self.last_kafka_consumed.keys():
-                    snapshot_data['last_kafka_consumed'] = self.last_kafka_consumed
+                    snapshot_data['last_kafka_consumed'] = self.last_kafka_consumed[operator]
                 self.last_messages_processed[operator] = {}
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
@@ -161,11 +161,18 @@ class Worker:
             self.last_messages_processed[operator_name] = deserialized_data['last_messages_processed']
             self.last_messages_sent[operator_name] = deserialized_data['last_messages_sent']
             if operator_name in self.last_kafka_consumed.keys():
-                self.last_kafka_consumed[operator_name] = deserialized_data['last_kafka_consumed']
-                for topic in self.last_kafka_consumed[operator_name].keys():
-                    for partition in self.last_kafka_consumed[operator_name][topic].keys():
-                        topic_partition_to_reset = TopicPartition(topic, int(partition))
-                        self.kafka_consumer.seek(topic_partition_to_reset, (self.last_kafka_consumed[operator_name][topic][partition] + 1))
+                if 'last_kafka_consumed' in deserialized_data.keys():
+                    self.last_kafka_consumed[operator_name] = deserialized_data['last_kafka_consumed']
+                else:
+                    logging.info('last_kafka_consumed not in restore message, setting to 0')
+                    kafka_consumed_zero = {}
+                    for (op, part) in self.registered_operators.keys():
+                        if op == operator_name:
+                            kafka_consumed_zero[part] = 0
+                    self.last_kafka_consumed[operator_name] = kafka_consumed_zero
+                for partition in self.last_kafka_consumed[operator_name].keys():
+                    topic_partition_to_reset = TopicPartition(operator_name, int(partition))
+                    self.kafka_consumer.seek(topic_partition_to_reset, (self.last_kafka_consumed[operator_name][partition] + 1))
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
 
@@ -389,6 +396,8 @@ class Worker:
         while True:
             current_time = time.time_ns() // 1000000
             if current_time > self.last_snapshot_timestamp[operator] + (checkpoint_interval*1000):
+                if isinstance(self.local_state, InMemoryOperatorState):
+                    logging.warning(f'current state: {self.local_state.data}')
                 await self.take_snapshot(operator)
                 await asyncio.sleep(checkpoint_interval)
             else:
