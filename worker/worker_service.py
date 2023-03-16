@@ -68,6 +68,9 @@ class Worker:
         self.last_kafka_consumed = {}
         self.kafka_consumer = None
 
+        # CIC variables
+        self.waiting_for_exe_graph = True
+
     async def run_function(
             self,
             payload: RunFuncPayload,
@@ -356,6 +359,7 @@ class Worker:
 
     async def handle_execution_plan(self, message):
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator = message
+        self.waiting_for_exe_graph = False
         for op in self.total_partitions_per_operator.keys():
             self.last_messages_processed[op] = {}
             self.last_snapshot_timestamp[op] = time.time_ns() // 1000000
@@ -384,6 +388,8 @@ class Worker:
                 await self.take_snapshot(operator)
 
     async def communication_induced_checkpointing(self, checkpoint_interval):
+        while self.waiting_for_exe_graph:
+            await asyncio.sleep(0.1)
         for operator in self.total_partitions_per_operator.keys():
             self.create_task(self.cic_per_operator(checkpoint_interval, operator))
 
@@ -391,8 +397,8 @@ class Worker:
         while True:
             current_time = time.time_ns() // 1000000
             if current_time > self.last_snapshot_timestamp[operator] + (checkpoint_interval*1000):
-                if isinstance(self.local_state, InMemoryOperatorState):
-                    logging.warning(f'current state: {self.local_state.data}')
+                if isinstance(self.local_state, InMemoryOperatorState) and operator in self.local_state.data.keys():
+                    logging.warning(f'current state for {operator}: {self.local_state.data[operator]}')
                 await self.take_snapshot(operator)
                 await asyncio.sleep(checkpoint_interval)
             else:
@@ -405,7 +411,7 @@ class Worker:
             f"Worker TCP Server listening at 0.0.0.0:{SERVER_PORT} "
             f"IP:{self.networking.host_name}"
         )
-        self.create_task(self.uncoordinated_checkpointing(5))
+        self.create_task(self.communication_induced_checkpointing(5))
         while True:
             # This is where we read from TCP, log at receiver
             resp_adr, data = await self.router.read()
