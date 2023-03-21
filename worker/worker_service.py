@@ -35,12 +35,16 @@ MINIO_ACCESS_KEY: str = os.environ['MINIO_ROOT_USER']
 MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
+# CIC, UNC, COR
+CHECKPOINT_PROTOCOL: str = 'CIC'
+
 
 class Worker:
 
     def __init__(self):
         self.id: int = -1
         self.networking = NetworkingManager()
+        self.networking.set_checkpoint_protocol(CHECKPOINT_PROTOCOL)
         self.router = None
         self.kafka_egress_producer = None
         self.operator_state_backend = None
@@ -122,6 +126,8 @@ class Worker:
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
                 last_messages_sent = await self.networking.flush_kafka_buffer(operator)
                 snapshot_data = {}
+                if CHECKPOINT_PROTOCOL == 'CIC':
+                    snapshot_data['cic_clock'] = await self.networking.update_cic_checkpoint(operator)
                 snapshot_data['last_messages_sent'] = last_messages_sent
                 snapshot_data['last_messages_processed'] = self.last_messages_processed[operator]
                 if operator in self.last_kafka_consumed.keys():
@@ -302,6 +308,11 @@ class Worker:
                 request_id = message['__RQ_ID__']
                 if message_type == 'RUN_FUN_REMOTE':
                     logging.info('CALLED RUN FUN FROM PEER')
+                    if CHECKPOINT_PROTOCOL == 'CIC':
+                        cycle_detected = await self.networking.cic_cycle_detection(message['__OP_NAME__'], message['__CIC_DETAILS__'])
+                        if cycle_detected:
+                            logging.warning('Cycle detected! Taking forced checkpoint.')
+                            # await self.take_snapshot(message['__OP_NAME__'])
                     sender_details = message['__SENT_FROM__']
                     payload = self.unpack_run_payload(message, request_id)
                     self.create_task(
@@ -363,8 +374,12 @@ class Worker:
         for op in self.total_partitions_per_operator.keys():
             self.last_messages_processed[op] = {}
             self.last_snapshot_timestamp[op] = time.time_ns() // 1000000
+        await self.networking.init_cic(self.total_partitions_per_operator.keys(), self.peers.keys())
+        # Start checkpointing
+        self.create_task(self.communication_induced_checkpointing(5))
         await self.networking.set_total_partitions_per_operator(self.total_partitions_per_operator)
         del self.peers[self.id]
+        self.networking.set_peers(self.peers)
         operator: Operator
         for tup in worker_operators:
             operator, partition = tup
@@ -411,7 +426,6 @@ class Worker:
             f"Worker TCP Server listening at 0.0.0.0:{SERVER_PORT} "
             f"IP:{self.networking.host_name}"
         )
-        self.create_task(self.communication_induced_checkpointing(5))
         while True:
             # This is where we read from TCP, log at receiver
             resp_adr, data = await self.router.read()
@@ -442,6 +456,7 @@ class Worker:
             },
             Serializer.MSGPACK
         )
+        self.networking.set_id(self.id)
         logging.info(f"Worker id: {self.id}")
 
     async def main(self):

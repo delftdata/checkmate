@@ -64,6 +64,27 @@ class NetworkingManager:
         self.last_messages_sent = {}
         self.total_partitions_per_operator = {}
 
+        self.id = -1
+        self.peers = {}
+
+        self.checkpoint_protocol = None
+
+        # CIC
+        self.sent_to = {}
+        self.logical_clock = {}
+        self.checkpoint_clocks = {}
+        self.taken = {}
+        self.greater = {}
+
+    def set_checkpoint_protocol(self, protocol):
+        self.checkpoint_protocol = protocol
+
+    def set_id(self, id):
+        self.id = id
+
+    def set_peers(self, peers):
+        self.peers = peers
+
     async def start_kafka_producer(self):
         # Set the batch_size and linger_ms to a high number and use manual flushes to commit to kafka.
         self.kafka_producer = AIOKafkaProducer(bootstrap_servers=[KAFKA_URL],
@@ -92,6 +113,90 @@ class NetworkingManager:
         self.total_partitions_per_operator = par_per_op
         for key in par_per_op.keys():
             self.last_messages_sent[key] = {}
+
+    async def init_cic(self, operators, ids):
+            for op in operators:
+                # CIC
+                # Normally the algorithm uses three arrays (two bool, one clock) and a logical clock per worker.
+                # However our checkpoints are operator based, meaning we need this for every operator separately.
+                self.sent_to[op] = {}
+                self.logical_clock[op] = 0
+                self.taken[op] = {}
+                self.greater[op] = {}
+                self.checkpoint_clocks[op] = {}
+                for id in ids:
+                    self.sent_to[op][id] = {}
+                    self.taken[op][id] = {}
+                    self.greater[op][id] = {}
+                    self.checkpoint_clocks[op][id] = {}
+                    for op2 in operators:
+                        self.sent_to[op][id][op2] = False
+                        self.taken[op][id][op2] = False
+                        self.greater[op][id][op2] = False
+                        self.checkpoint_clocks[op][id][op2] = 0
+
+    async def update_cic_checkpoint(self, operator):
+        for id in self.sent_to[operator].keys():
+            for op in self.sent_to[operator][id].keys():
+                self.sent_to[operator][id][op] = False
+                if not (op == operator and self.id == id):
+                    self.taken[operator][id][op] = True
+                    self.greater[operator][id][op] = True
+        self.logical_clock[operator] = self.logical_clock[operator] + 1
+        self.checkpoint_clocks[operator][self.id][operator] = self.checkpoint_clocks[operator][self.id][operator] + 1
+        return self.logical_clock[operator]
+
+    async def get_worker_id(self, host, port):
+        worker_id = self.id
+        for id in self.peers.keys():
+            if (host, port) == self.peers[id]:
+                worker_id = id
+                break
+        return worker_id
+    
+    async def cic_cycle_detection(self, operator, cic_details):
+        if cic_details == {}:
+            return False
+        cycle_detected = False
+        sent_greater_and = False
+        for id in self.sent_to[operator].keys():
+            for op in self.sent_to[operator][id].keys():
+                if self.sent_to[operator][id][op] and cic_details['__GREATER__'][id][op]:
+                    sent_greater_and = True
+                    break
+            if sent_greater_and:
+                break
+        if (sent_greater_and and cic_details['__LC__'] > self.logical_clock) or (cic_details['__CHECKPOINT_CLOCKS__'][self.id][operator] == self.checkpoint_clocks[operator][self.id][operator] and cic_details['__TAKEN__'][self.id][operator]):
+            cycle_detected = True
+        
+        # Compare local clocks
+
+        if cic_details['__LC__'] > self.logical_clock[operator]:
+            self.logical_clock[operator] = cic_details['__LC__']
+            self.greater[operator][self.id][operator] = False
+            for id in self.greater[operator].keys():
+                for op in self.greater[operator][id].keys():
+                    if not (id == self.id and op == operator):
+                        self.greater[operator][id][op] = cic_details['__GREATER__'][id][op]
+        elif cic_details['__LC__'] == self.logical_clock[operator]:
+            for id in self.greater[operator].keys():
+                for op in self.greater[operator][id].keys():
+                    self.greater[operator][id][op] = self.greater[operator][id][op] and cic_details['__GREATER__'][id][op]
+
+        # Compare checkpoint clocks
+
+        for id in cic_details['__CHECKPOINT_CLOCKS__'].keys():
+            for op in cic_details['__CHECKPOINT_CLOCKS__'][id].keys():
+                if id == self.id and op == operator:
+                    continue
+                else:
+                    if cic_details['__CHECKPOINT_CLOCKS__'][id][op] > self.checkpoint_clocks[operator][id][op]:
+                        self.checkpoint_clocks[operator][id][op] = cic_details['__CHECKPOINT_CLOCKS__'][id][op]
+                        self.taken[operator][id][op] = cic_details['__TAKEN__'][id][op]
+                    elif cic_details['__CHECKPOINT_CLOCKS__'][id][op] == self.checkpoint_clocks[operator][id][op]:
+                        self.taken[operator][id][op] = cic_details['__TAKEN__'][id][op] and self.taken[operator][id][op]
+
+        return cycle_detected
 
     def close_all_connections(self):
         for pool in self.pools.values():
@@ -128,6 +233,14 @@ class NetworkingManager:
             'port': port
         }
         if msg['__COM_TYPE__'] == 'RUN_FUN_REMOTE':
+            msg['__MSG__']['__CIC_DETAILS__'] = {}
+            if self.checkpoint_protocol == 'CIC':
+                receiver_id = await self.get_worker_id(host, port)
+                self.sent_to[sending_name][receiver_id][msg['__MSG__']['__OP_NAME__']] = True
+                msg['__MSG__']['__CIC_DETAILS__']['__LC__'] = self.logical_clock[sending_name]
+                msg['__MSG__']['__CIC_DETAILS__']['__GREATER__'] = self.greater[sending_name]
+                msg['__MSG__']['__CIC_DETAILS__']['__TAKEN__'] = self.taken[sending_name]
+                msg['__MSG__']['__CIC_DETAILS__']['__CHECKPOINT_CLOCKS__'] = self.checkpoint_clocks[sending_name]
             msg['__MSG__']['__SENT_FROM__'] = sender_details
             msg['__MSG__']['__SENT_TO__'] = receiver_details
             receiving_name = msg['__MSG__']['__OP_NAME__']
