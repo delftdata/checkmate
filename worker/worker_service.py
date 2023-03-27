@@ -176,7 +176,11 @@ class Worker:
                         topic_partition_to_reset = TopicPartition(operator_name, int(partition))
                         self.kafka_consumer.seek(topic_partition_to_reset, (self.last_kafka_consumed[operator_name][partition] + 1))
                 else:
-                    logging.warning('last_kafka_consumed not in restore message')
+                    logging.warning('last_kafka_consumed not in restore message, resetting to 0')
+                    for partition in self.last_kafka_consumed[operator_name].keys():
+                        self.last_kafka_consumed[operator_name][partition] = 0
+                        topic_partition_to_reset = TopicPartition(operator_name, int(partition))
+                        self.kafka_consumer.seek(topic_partition_to_reset, 0)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
 
@@ -338,6 +342,9 @@ class Worker:
                         async with self.snapshot_state_lock:
                             self.local_state.data[op_name] = {}
                             self.last_messages_processed[op_name] = {}
+                            for partition in self.last_kafka_consumed[op_name].keys():
+                                topic_partition_to_reset = TopicPartition(op_name, int(partition))
+                                self.kafka_consumer.seek(topic_partition_to_reset, 0)
                     else:
                         # Build the snapshot name from the recovery message received
                         snapshot_to_restore = f'snapshot_{self.id}_{op_name}_{message[op_name][0]}.bin'
