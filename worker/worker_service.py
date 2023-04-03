@@ -119,7 +119,7 @@ class Worker:
         return success
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
-    async def take_snapshot(self, operator):
+    async def take_snapshot(self, operator, cic_clock=0):
         if isinstance(self.local_state, InMemoryOperatorState):
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
@@ -127,7 +127,7 @@ class Worker:
                 last_messages_sent = await self.networking.flush_kafka_buffer(operator)
                 snapshot_data = {}
                 if CHECKPOINT_PROTOCOL == 'CIC':
-                    snapshot_data['cic_clock'] = await self.networking.update_cic_checkpoint(operator)
+                    snapshot_data['cic_clock'] = cic_clock
                 snapshot_data['last_messages_sent'] = last_messages_sent
                 snapshot_data['last_messages_processed'] = self.last_messages_processed[operator]
                 if operator in self.last_kafka_consumed.keys():
@@ -265,7 +265,7 @@ class Worker:
         await self.networking.replay_message(receiver_info['host'], receiver_info['port'], deserialized_data)
 
     async def simple_failure(self):
-        await asyncio.sleep(40)
+        await asyncio.sleep(200)
         if self.id == 1:
             await self.networking.send_message(
                 DISCOVERY_HOST, DISCOVERY_PORT,
@@ -313,10 +313,12 @@ class Worker:
                 if message_type == 'RUN_FUN_REMOTE':
                     logging.info('CALLED RUN FUN FROM PEER')
                     if CHECKPOINT_PROTOCOL == 'CIC':
-                        cycle_detected = await self.networking.cic_cycle_detection(message['__OP_NAME__'], message['__CIC_DETAILS__'])
+                        oper_name = message['__OP_NAME__']
+                        cycle_detected, cic_clock = await self.networking.cic_cycle_detection(oper_name, message['__CIC_DETAILS__'])
                         if cycle_detected:
-                            logging.warning('Cycle detected! Taking forced checkpoint.')
-                            # await self.take_snapshot(message['__OP_NAME__'])
+                            logging.warning(f'Cycle detected for operator {oper_name}! Taking forced checkpoint.')
+                            # await self.networking.update_cic_checkpoint(oper_name)
+                            await self.take_snapshot(message['__OP_NAME__'], cic_clock=cic_clock)
                     sender_details = message['__SENT_FROM__']
                     payload = self.unpack_run_payload(message, request_id)
                     self.create_task(
@@ -421,7 +423,9 @@ class Worker:
             if current_time > self.last_snapshot_timestamp[operator] + (checkpoint_interval*1000):
                 if isinstance(self.local_state, InMemoryOperatorState) and operator in self.local_state.data.keys():
                     logging.warning(f'current state for {operator}: {self.local_state.data[operator]}')
-                await self.take_snapshot(operator)
+                await self.networking.update_cic_checkpoint(operator)
+                cic_clock = await self.networking.get_cic_logical_clock(operator)
+                await self.take_snapshot(operator, cic_clock=cic_clock)
                 await asyncio.sleep(checkpoint_interval)
             else:
                 await asyncio.sleep(ceil(((self.last_snapshot_timestamp[operator] + (checkpoint_interval*1000)) - current_time) / 1000))

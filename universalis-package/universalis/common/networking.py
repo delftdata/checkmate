@@ -117,7 +117,7 @@ class NetworkingManager:
     async def init_cic(self, operators, ids):
             for op in operators:
                 # CIC
-                # Normally the algorithm uses three arrays (two bool, one clock) and a logical clock per worker.
+                # Normally the algorithm uses four arrays (three bool, one vector clock) and a logical clock per worker.
                 # However our checkpoints are operator based, meaning we need this for every operator separately.
                 self.sent_to[op] = {}
                 self.logical_clock[op] = 0
@@ -154,6 +154,9 @@ class NetworkingManager:
                 break
         return worker_id
     
+    async def get_cic_logical_clock(self, operator):
+        return self.logical_clock[operator]
+    
     async def cic_cycle_detection(self, operator, cic_details):
         if cic_details == {}:
             return False
@@ -166,8 +169,11 @@ class NetworkingManager:
                     break
             if sent_greater_and:
                 break
-        if (sent_greater_and and cic_details['__LC__'] > self.logical_clock) or (cic_details['__CHECKPOINT_CLOCKS__'][self.id][operator] == self.checkpoint_clocks[operator][self.id][operator] and cic_details['__TAKEN__'][self.id][operator]):
+        if (sent_greater_and and (cic_details['__LC__'] > self.logical_clock[operator])) or ((cic_details['__CHECKPOINT_CLOCKS__'][self.id][operator] == self.checkpoint_clocks[operator][self.id][operator]) and cic_details['__TAKEN__'][self.id][operator]):
+            await self.update_cic_checkpoint(operator)
             cycle_detected = True
+
+        cic_clock = self.logical_clock[operator]
         
         # Compare local clocks
 
@@ -194,9 +200,9 @@ class NetworkingManager:
                         self.checkpoint_clocks[operator][id][op] = cic_details['__CHECKPOINT_CLOCKS__'][id][op]
                         self.taken[operator][id][op] = cic_details['__TAKEN__'][id][op]
                     elif cic_details['__CHECKPOINT_CLOCKS__'][id][op] == self.checkpoint_clocks[operator][id][op]:
-                        self.taken[operator][id][op] = cic_details['__TAKEN__'][id][op] and self.taken[operator][id][op]
+                        self.taken[operator][id][op] = cic_details['__TAKEN__'][id][op] or self.taken[operator][id][op]
 
-        return cycle_detected
+        return cycle_detected, cic_clock
 
     def close_all_connections(self):
         for pool in self.pools.values():
