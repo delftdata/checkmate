@@ -22,6 +22,8 @@ from worker.operator_state.in_memory_state import InMemoryOperatorState
 from worker.operator_state.redis_state import RedisOperatorState
 from worker.operator_state.stateless import Stateless
 from worker.run_func_payload import RunFuncPayload
+from worker.checkpointing.uncoordinated_checkpointing import UncoordinatedCheckpointing
+from worker.checkpointing.cic_checkpointing import CICCheckpointing
 
 SERVER_PORT: int = 8888
 DISCOVERY_HOST: str = os.environ['DISCOVERY_HOST']
@@ -42,6 +44,7 @@ CHECKPOINT_PROTOCOL: str = 'CIC'
 class Worker:
 
     def __init__(self):
+        self.checkpointing = None
         self.id: int = -1
         self.networking = NetworkingManager()
         self.networking.set_checkpoint_protocol(CHECKPOINT_PROTOCOL)
@@ -114,6 +117,7 @@ class Worker:
                 value=msgpack_serialization(kafka_response)
             ))
         if send_from is not None:
+            # Necessary for uncoordinated checkpointing
             incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
             self.last_messages_processed[payload.operator_name][incoming_channel] = send_from['kafka_offset']
         return success
@@ -314,7 +318,8 @@ class Worker:
                     logging.info('CALLED RUN FUN FROM PEER')
                     if CHECKPOINT_PROTOCOL == 'CIC':
                         oper_name = message['__OP_NAME__']
-                        cycle_detected, cic_clock = await self.networking.cic_cycle_detection(oper_name, message['__CIC_DETAILS__'])
+                        # CHANGE TO CIC OBJECT
+                        cycle_detected, cic_clock = await self.checkpointing.cic_cycle_detection(oper_name, message['__CIC_DETAILS__'])
                         if cycle_detected:
                             logging.warning(f'Cycle detected for operator {oper_name}! Taking forced checkpoint.')
                             # await self.networking.update_cic_checkpoint(oper_name)
@@ -336,24 +341,28 @@ class Worker:
                     )
             case 'RECOVER_FROM_SNAPSHOT':
                 logging.warning(f'Recovery message received: {message}')
-                for op_name in message.keys():
+                match CHECKPOINT_PROTOCOL:
+                    case 'CIC' | 'UNC':
+                        for op_name in message.keys():
 
-                    # If timestamp is zero, it means reset from the beginning
-                    # Therefore we reset the local state to an empty dict
-                    if message[op_name][0] == 0:
-                        async with self.snapshot_state_lock:
-                            self.local_state.data[op_name] = {}
-                            self.last_messages_processed[op_name] = {}
-                            for partition in self.last_kafka_consumed[op_name].keys():
-                                topic_partition_to_reset = TopicPartition(op_name, int(partition))
-                                self.kafka_consumer.seek(topic_partition_to_reset, 0)
-                    else:
-                        # Build the snapshot name from the recovery message received
-                        snapshot_to_restore = f'snapshot_{self.id}_{op_name}_{message[op_name][0]}.bin'
-                        await self.restore_from_snapshot(snapshot_to_restore, op_name)
-                    # Replay channels from corresponding offsets in message[1]
-                    for channel in message[op_name][1].keys():
-                        await self.replay_from_kafka(channel, message[op_name][1][channel])
+                            # If timestamp is zero, it means reset from the beginning
+                            # Therefore we reset the local state to an empty dict
+                            if message[op_name][0] == 0:
+                                async with self.snapshot_state_lock:
+                                    self.local_state.data[op_name] = {}
+                                    self.last_messages_processed[op_name] = {}
+                                    for partition in self.last_kafka_consumed[op_name].keys():
+                                        topic_partition_to_reset = TopicPartition(op_name, int(partition))
+                                        self.kafka_consumer.seek(topic_partition_to_reset, 0)
+                            else:
+                                # Build the snapshot name from the recovery message received
+                                snapshot_to_restore = f'snapshot_{self.id}_{op_name}_{message[op_name][0]}.bin'
+                                await self.restore_from_snapshot(snapshot_to_restore, op_name)
+                            # Replay channels from corresponding offsets in message[1]
+                            for channel in message[op_name][1].keys():
+                                await self.replay_from_kafka(channel, message[op_name][1][channel])
+                    case _:
+                        logging.warning('Snapshot restore message received for unknown protocol, no restoration.')
             case 'RECEIVE_EXE_PLN':  # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
                 # This contains all the operators of a job assigned to this worker
 
@@ -380,15 +389,25 @@ class Worker:
     async def handle_execution_plan(self, message):
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator = message
         self.waiting_for_exe_graph = False
+        self.checkpointing = CICCheckpointing()
+        self.checkpointing.set_id(self.id)
+        self.networking.set_checkpointing(self.checkpointing)
         for op in self.total_partitions_per_operator.keys():
             self.last_messages_processed[op] = {}
             self.last_snapshot_timestamp[op] = time.time_ns() // 1000000
-        await self.networking.init_cic(self.total_partitions_per_operator.keys(), self.peers.keys())
-        # Start checkpointing
-        self.create_task(self.communication_induced_checkpointing(5))
+
+        match CHECKPOINT_PROTOCOL:
+            case 'CIC':
+                # CHANGE TO CIC OBJECT
+                await self.checkpointing.init_cic(self.total_partitions_per_operator.keys(), self.peers.keys())
+                del self.peers[self.id]
+                # START CHECKPOINTING DEPENDING ON PROTOCOL
+                self.create_task(self.communication_induced_checkpointing(5))
+                # CHANGE TO CIC OBJECT
+                self.checkpointing.set_peers(self.peers)
+            case _:
+                logging.warning('CHECKPOINTING_PROTOCOL not supported, not checkpointing')
         await self.networking.set_total_partitions_per_operator(self.total_partitions_per_operator)
-        del self.peers[self.id]
-        self.networking.set_peers(self.peers)
         operator: Operator
         for tup in worker_operators:
             operator, partition = tup
@@ -402,6 +421,8 @@ class Worker:
             f'Peers: {self.peers} \n'
             f'Operator locations: {self.dns}'
         )
+
+    # CHECKPOINTING PROTOCOLS:
 
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
@@ -423,8 +444,8 @@ class Worker:
             if current_time > self.last_snapshot_timestamp[operator] + (checkpoint_interval*1000):
                 if isinstance(self.local_state, InMemoryOperatorState) and operator in self.local_state.data.keys():
                     logging.warning(f'current state for {operator}: {self.local_state.data[operator]}')
-                await self.networking.update_cic_checkpoint(operator)
-                cic_clock = await self.networking.get_cic_logical_clock(operator)
+                await self.checkpointing.update_cic_checkpoint(operator)
+                cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
                 await self.take_snapshot(operator, cic_clock=cic_clock)
                 await asyncio.sleep(checkpoint_interval)
             else:
@@ -467,7 +488,6 @@ class Worker:
             },
             Serializer.MSGPACK
         )
-        self.networking.set_id(self.id)
         logging.info(f"Worker id: {self.id}")
 
     async def main(self):
