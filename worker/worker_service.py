@@ -58,7 +58,7 @@ class Worker:
         self.local_state: InMemoryOperatorState | RedisOperatorState | Stateless = Stateless()
         # background task references
         self.background_tasks = set()
-        self.last_messages_processed = {}
+        self.total_partitions_per_operator = {}
         # snapshot
         self.minio_client: Minio = Minio(
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
@@ -69,11 +69,6 @@ class Worker:
             secret_key=MINIO_SECRET_KEY, secure=False
         )
         self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
-        self.last_snapshot_timestamp = {}
-        self.total_partitions_per_operator = {}
-        self.last_messages_sent = {}
-        self.last_kafka_consumed = {}
-        self.kafka_consumer = None
 
         # CIC variables
         self.waiting_for_exe_graph = True
@@ -119,7 +114,7 @@ class Worker:
         if send_from is not None:
             # Necessary for uncoordinated checkpointing
             incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
-            self.last_messages_processed[payload.operator_name][incoming_channel] = send_from['kafka_offset']
+            self.checkpointing.set_last_messages_processed(payload.operator_name, incoming_channel, send_from['kafka_offset'])
         return success
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
@@ -130,13 +125,14 @@ class Worker:
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
                 last_messages_sent = await self.networking.flush_kafka_buffer(operator)
                 snapshot_data = {}
-                if CHECKPOINT_PROTOCOL == 'CIC':
-                    snapshot_data['cic_clock'] = cic_clock
-                snapshot_data['last_messages_sent'] = last_messages_sent
-                snapshot_data['last_messages_processed'] = self.last_messages_processed[operator]
-                if operator in self.last_kafka_consumed.keys():
-                    snapshot_data['last_kafka_consumed'] = self.last_kafka_consumed[operator]
-                self.last_messages_processed[operator] = {}
+                match CHECKPOINT_PROTOCOL:
+                    case 'UNC':
+                        snapshot_data = await self.checkpointing.get_snapshot_data(operator, last_messages_sent)
+                    case 'CIC':
+                        snapshot_data = await self.checkpointing.get_snapshot_data(operator, last_messages_sent)
+                        snapshot_data['cic_clock'] = cic_clock
+                    case _:
+                        logging.warning('Unknown protocol, no snapshot data added.')
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
             snapshot_time = time.time_ns() // 1000000
@@ -147,7 +143,6 @@ class Worker:
                 data=io.BytesIO(bytes_file),
                 length=len(bytes_file)
             )
-            self.last_snapshot_timestamp[operator] = time.time_ns() // 1000000
             coordinator_info = {}
             coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
             coordinator_info['last_messages_sent'] = last_messages_sent
@@ -171,20 +166,12 @@ class Worker:
         async with self.snapshot_state_lock:
             deserialized_data = compressed_msgpack_deserialization(state_to_restore)
             self.local_state.data[operator_name] = deserialized_data['local_state_data']
-            self.last_messages_processed[operator_name] = deserialized_data['last_messages_processed']
-            self.last_messages_sent[operator_name] = deserialized_data['last_messages_sent']
-            if operator_name in self.last_kafka_consumed.keys():
-                if 'last_kafka_consumed' in deserialized_data.keys():
-                    self.last_kafka_consumed[operator_name] = deserialized_data['last_kafka_consumed']
-                    for partition in self.last_kafka_consumed[operator_name].keys():
-                        topic_partition_to_reset = TopicPartition(operator_name, int(partition))
-                        self.kafka_consumer.seek(topic_partition_to_reset, (self.last_kafka_consumed[operator_name][partition] + 1))
-                else:
-                    logging.warning('last_kafka_consumed not in restore message, resetting to 0')
-                    for partition in self.last_kafka_consumed[operator_name].keys():
-                        self.last_kafka_consumed[operator_name][partition] = 0
-                        topic_partition_to_reset = TopicPartition(operator_name, int(partition))
-                        self.kafka_consumer.seek(topic_partition_to_reset, 0)
+        last_kafka_consumed = {}
+        if 'last_kafka_consumed' in deserialized_data.keys():
+            last_kafka_consumed = deserialized_data['last_kafka_consumed']
+        to_replay = await self.checkpointing.restore_snapshot_data(operator_name, deserialized_data['last_messages_processed'], deserialized_data['last_messages_sent'], last_kafka_consumed)
+        for (tp, offset) in to_replay:
+            self.kafka_consumer.seek(tp, offset)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
 
@@ -230,9 +217,7 @@ class Worker:
             await self.networking.stop_kafka_producer()
 
     async def replay_from_kafka(self, channel, offset):
-        replay_until = None
-        if channel in self.last_messages_sent.keys():
-            replay_until = self.last_messages_sent[channel]
+        replay_until = await self.checkpointing.find_last_sent_offset(channel)
         sent_op, rec_op, partition = channel.split('_')
         # Create a kafka consumer for the given channel and seek the given offset.
         # For every kafka message, send over TCP without logging the message sent.
@@ -285,9 +270,7 @@ class Worker:
             f"Consumed: {msg.topic} {msg.partition} {msg.offset} "
             f"{msg.key} {msg.value} {msg.timestamp}"
         )
-        if msg.topic not in self.last_kafka_consumed:
-            self.last_kafka_consumed[msg.topic] = {}
-        self.last_kafka_consumed[msg.topic][str(msg.partition)] = msg.offset
+        self.checkpointing.set_consumed_offset(msg.topic, msg.partition, msg.offset)
         deserialized_data: dict = self.networking.decode_message(msg.value)
         # This data should be added to a replay kafka topic.
         message_type: str = deserialized_data['__COM_TYPE__']
@@ -350,10 +333,9 @@ class Worker:
                             if message[op_name][0] == 0:
                                 async with self.snapshot_state_lock:
                                     self.local_state.data[op_name] = {}
-                                    self.last_messages_processed[op_name] = {}
-                                    for partition in self.last_kafka_consumed[op_name].keys():
-                                        topic_partition_to_reset = TopicPartition(op_name, int(partition))
-                                        self.kafka_consumer.seek(topic_partition_to_reset, 0)
+                                    tp_to_reset = await self.checkpointing.reset_messages_processed(op_name)
+                                    for tp in tp_to_reset:
+                                        self.kafka_consumer.seek(tp, 0)
                             else:
                                 # Build the snapshot name from the recovery message received
                                 snapshot_to_restore = f'snapshot_{self.id}_{op_name}_{message[op_name][0]}.bin'
@@ -392,9 +374,7 @@ class Worker:
         self.checkpointing = CICCheckpointing()
         self.checkpointing.set_id(self.id)
         self.networking.set_checkpointing(self.checkpointing)
-        for op in self.total_partitions_per_operator.keys():
-            self.last_messages_processed[op] = {}
-            self.last_snapshot_timestamp[op] = time.time_ns() // 1000000
+        self.checkpointing.init_attributes_per_operator(self.total_partitions_per_operator.keys())
 
         match CHECKPOINT_PROTOCOL:
             case 'CIC':
@@ -441,7 +421,8 @@ class Worker:
     async def cic_per_operator(self, checkpoint_interval, operator):
         while True:
             current_time = time.time_ns() // 1000000
-            if current_time > self.last_snapshot_timestamp[operator] + (checkpoint_interval*1000):
+            last_snapshot_timestamp = self.checkpointing.get_last_snapshot_timestamp(operator)
+            if current_time > last_snapshot_timestamp + (checkpoint_interval*1000):
                 if isinstance(self.local_state, InMemoryOperatorState) and operator in self.local_state.data.keys():
                     logging.warning(f'current state for {operator}: {self.local_state.data[operator]}')
                 await self.checkpointing.update_cic_checkpoint(operator)
@@ -449,7 +430,7 @@ class Worker:
                 await self.take_snapshot(operator, cic_clock=cic_clock)
                 await asyncio.sleep(checkpoint_interval)
             else:
-                await asyncio.sleep(ceil(((self.last_snapshot_timestamp[operator] + (checkpoint_interval*1000)) - current_time) / 1000))
+                await asyncio.sleep(ceil(((last_snapshot_timestamp + (checkpoint_interval*1000)) - current_time) / 1000))
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")

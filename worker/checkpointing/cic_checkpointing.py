@@ -2,6 +2,7 @@ from worker.checkpointing.uncoordinated_checkpointing import UncoordinatedCheckp
 
 class CICCheckpointing(UncoordinatedCheckpointing):
     def __init__(self):
+        super().__init__()
         # CIC
         self.sent_to = {}
         self.logical_clock = {}
