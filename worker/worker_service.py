@@ -114,7 +114,7 @@ class Worker:
         if send_from is not None:
             # Necessary for uncoordinated checkpointing
             incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
-            self.checkpointing.set_last_messages_processed(payload.operator_name, incoming_channel, send_from['kafka_offset'])
+            await self.checkpointing.set_last_messages_processed(payload.operator_name, incoming_channel, send_from['kafka_offset'])
         return success
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
@@ -371,10 +371,16 @@ class Worker:
     async def handle_execution_plan(self, message):
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator = message
         self.waiting_for_exe_graph = False
-        self.checkpointing = CICCheckpointing()
-        self.checkpointing.set_id(self.id)
+        match CHECKPOINT_PROTOCOL:
+            case 'CIC':
+                self.checkpointing = CICCheckpointing()
+            case 'UNC':
+                self.checkpointing = UncoordinatedCheckpointing()
+            case _:
+                logging.warning('Not supported value is set for CHECKPOINTING_PROTOCOL, continue without checkpoints.')
+        await self.checkpointing.set_id(self.id)
         self.networking.set_checkpointing(self.checkpointing)
-        self.checkpointing.init_attributes_per_operator(self.total_partitions_per_operator.keys())
+        await self.checkpointing.init_attributes_per_operator(self.total_partitions_per_operator.keys())
 
         match CHECKPOINT_PROTOCOL:
             case 'CIC':
@@ -384,9 +390,12 @@ class Worker:
                 # START CHECKPOINTING DEPENDING ON PROTOCOL
                 self.create_task(self.communication_induced_checkpointing(5))
                 # CHANGE TO CIC OBJECT
-                self.checkpointing.set_peers(self.peers)
+                await self.checkpointing.set_peers(self.peers)
+            case 'UNC':
+                del self.peers[self.id]
+                self.create_task(self.uncoordinated_checkpointing(5))
             case _:
-                logging.warning('CHECKPOINTING_PROTOCOL not supported, not checkpointing')
+                logging.info('no checkpointing started.')
         await self.networking.set_total_partitions_per_operator(self.total_partitions_per_operator)
         operator: Operator
         for tup in worker_operators:
@@ -421,7 +430,7 @@ class Worker:
     async def cic_per_operator(self, checkpoint_interval, operator):
         while True:
             current_time = time.time_ns() // 1000000
-            last_snapshot_timestamp = self.checkpointing.get_last_snapshot_timestamp(operator)
+            last_snapshot_timestamp = await self.checkpointing.get_last_snapshot_timestamp(operator)
             if current_time > last_snapshot_timestamp + (checkpoint_interval*1000):
                 if isinstance(self.local_state, InMemoryOperatorState) and operator in self.local_state.data.keys():
                     logging.warning(f'current state for {operator}: {self.local_state.data[operator]}')

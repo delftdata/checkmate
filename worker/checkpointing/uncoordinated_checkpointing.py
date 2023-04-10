@@ -12,13 +12,13 @@ class UncoordinatedCheckpointing:
         self.kafka_consumer = None
         self.last_messages_processed = {}
 
-    def set_id(self, id):
+    async def set_id(self, id):
         self.id = id
 
-    def set_peers(self, peers):
+    async def set_peers(self, peers):
         self.peers = peers
 
-    def set_last_messages_processed(self, operator, channel, offset):
+    async def set_last_messages_processed(self, operator, channel, offset):
         self.last_messages_processed[operator][channel] = offset
 
     def set_consumed_offset(self, topic, partition, offset):
@@ -26,12 +26,12 @@ class UncoordinatedCheckpointing:
             self.last_kafka_consumed[topic] = {}
         self.last_kafka_consumed[topic][str(partition)] = offset
 
-    def init_attributes_per_operator(self, operators):
+    async def init_attributes_per_operator(self, operators):
         for op in operators:
             self.last_messages_processed[op] = {}
             self.last_snapshot_timestamp[op] = time.time_ns() // 1000000
 
-    def get_last_snapshot_timestamp(self, operator):
+    async def get_last_snapshot_timestamp(self, operator):
         return self.last_snapshot_timestamp[operator]
 
     async def get_snapshot_data(self, operator, last_messages_sent):
