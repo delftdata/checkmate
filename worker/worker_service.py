@@ -37,17 +37,13 @@ MINIO_ACCESS_KEY: str = os.environ['MINIO_ROOT_USER']
 MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
-# CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'CIC'
-
-
 class Worker:
 
     def __init__(self):
+        self.checkpoint_protocol = None
         self.checkpointing = None
         self.id: int = -1
         self.networking = NetworkingManager()
-        self.networking.set_checkpoint_protocol(CHECKPOINT_PROTOCOL)
         self.router = None
         self.kafka_egress_producer = None
         self.operator_state_backend = None
@@ -125,7 +121,7 @@ class Worker:
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
                 last_messages_sent = await self.networking.flush_kafka_buffer(operator)
                 snapshot_data = {}
-                match CHECKPOINT_PROTOCOL:
+                match self.checkpoint_protocol:
                     case 'UNC':
                         snapshot_data = await self.checkpointing.get_snapshot_data(operator, last_messages_sent)
                     case 'CIC':
@@ -299,7 +295,7 @@ class Worker:
                 request_id = message['__RQ_ID__']
                 if message_type == 'RUN_FUN_REMOTE':
                     logging.info('CALLED RUN FUN FROM PEER')
-                    if CHECKPOINT_PROTOCOL == 'CIC':
+                    if self.checkpoint_protocol == 'CIC':
                         oper_name = message['__OP_NAME__']
                         # CHANGE TO CIC OBJECT
                         cycle_detected, cic_clock = await self.checkpointing.cic_cycle_detection(oper_name, message['__CIC_DETAILS__'])
@@ -322,9 +318,12 @@ class Worker:
                             payload
                         )
                     )
+            case 'CHECKPOINT_PROTOCOL':
+                self.checkpoint_protocol = message
+                self.networking.set_checkpoint_protocol(message)
             case 'RECOVER_FROM_SNAPSHOT':
                 logging.warning(f'Recovery message received: {message}')
-                match CHECKPOINT_PROTOCOL:
+                match self.checkpoint_protocol:
                     case 'CIC' | 'UNC':
                         for op_name in message.keys():
 
@@ -371,7 +370,7 @@ class Worker:
     async def handle_execution_plan(self, message):
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator = message
         self.waiting_for_exe_graph = False
-        match CHECKPOINT_PROTOCOL:
+        match self.checkpoint_protocol:
             case 'CIC':
                 self.checkpointing = CICCheckpointing()
             case 'UNC':
@@ -382,7 +381,7 @@ class Worker:
         self.networking.set_checkpointing(self.checkpointing)
         await self.checkpointing.init_attributes_per_operator(self.total_partitions_per_operator.keys())
 
-        match CHECKPOINT_PROTOCOL:
+        match self.checkpoint_protocol:
             case 'CIC':
                 # CHANGE TO CIC OBJECT
                 await self.checkpointing.init_cic(self.total_partitions_per_operator.keys(), self.peers.keys())

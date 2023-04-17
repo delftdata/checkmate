@@ -22,6 +22,8 @@ MINIO_ACCESS_KEY: str = os.environ['MINIO_ROOT_USER']
 MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
+# CIC, UNC, COR
+CHECKPOINT_PROTOCOL: str = 'CIC'
 
 class CoordinatorService:
 
@@ -333,6 +335,14 @@ class CoordinatorService:
                         self.messages_sent_intervals[str(assigned_id)] = {}
                         self.messages_to_replay[str(assigned_id)] = {}
                         logging.info(f"Worker registered {message} with id {reply}")
+                        await self.networking.send_message(
+                            message, WORKER_PORT,
+                            {
+                                "__COM_TYPE__": 'CHECKPOINT_PROTOCOL',
+                                "__MSG__": CHECKPOINT_PROTOCOL
+                            },
+                            Serializer.MSGPACK
+                        )
                     case 'SNAPSHOT_TAKEN':
                         await self.process_snapshot_information(message)
                     case 'WORKER_FAILED':
