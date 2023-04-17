@@ -107,7 +107,7 @@ class Worker:
                 key=payload.request_id,
                 value=msgpack_serialization(kafka_response)
             ))
-        if send_from is not None:
+        if send_from is not None and (self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC'):
             # Necessary for uncoordinated checkpointing
             incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
             await self.checkpointing.set_last_messages_processed(payload.operator_name, incoming_channel, send_from['kafka_offset'])
@@ -266,7 +266,9 @@ class Worker:
             f"Consumed: {msg.topic} {msg.partition} {msg.offset} "
             f"{msg.key} {msg.value} {msg.timestamp}"
         )
-        self.checkpointing.set_consumed_offset(msg.topic, msg.partition, msg.offset)
+        match self.checkpoint_protocol:
+            case 'UNC' | 'CIC':
+                self.checkpointing.set_consumed_offset(msg.topic, msg.partition, msg.offset)
         deserialized_data: dict = self.networking.decode_message(msg.value)
         # This data should be added to a replay kafka topic.
         message_type: str = deserialized_data['__COM_TYPE__']
@@ -373,13 +375,15 @@ class Worker:
         match self.checkpoint_protocol:
             case 'CIC':
                 self.checkpointing = CICCheckpointing()
+                await self.checkpointing.set_id(self.id)
+                await self.checkpointing.init_attributes_per_operator(self.total_partitions_per_operator.keys())
             case 'UNC':
                 self.checkpointing = UncoordinatedCheckpointing()
+                await self.checkpointing.set_id(self.id)
+                await self.checkpointing.init_attributes_per_operator(self.total_partitions_per_operator.keys())
             case _:
                 logging.warning('Not supported value is set for CHECKPOINTING_PROTOCOL, continue without checkpoints.')
-        await self.checkpointing.set_id(self.id)
         self.networking.set_checkpointing(self.checkpointing)
-        await self.checkpointing.init_attributes_per_operator(self.total_partitions_per_operator.keys())
 
         match self.checkpoint_protocol:
             case 'CIC':
