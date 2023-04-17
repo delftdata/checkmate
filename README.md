@@ -24,4 +24,5 @@ To get performance metrics kill the `kafka_output_comsumer.py` and then run `cal
 
 ### Pytest
 
-python -m pytest coordinator/ -rP -W ignore::DeprecationWarning
+Replace coordinator with worker to run the CIC tests:
+`python -m pytest coordinator/ -rP -W ignore::DeprecationWarning`
