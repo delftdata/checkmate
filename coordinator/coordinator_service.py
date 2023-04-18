@@ -51,6 +51,9 @@ class CoordinatorService:
         self.snapshot_timestamps = {}
         self.messages_to_replay = {}
 
+        #Coordinated approach
+        self.checkpoint_round = 0
+
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
         self.partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message)
@@ -288,6 +291,23 @@ class CoordinatorService:
             # Look up the previous snapshot timestamp and add an edge from that snapshot to the one we are currently processing.
             self.recovery_graph[(snapshot_name[1], snapshot_name[2], int(self.snapshot_timestamps[snapshot_name[1]][snapshot_name[2]][snapshot_number-1]))].add((snapshot_name[1], snapshot_name[2], int(snapshot_name[3])))
 
+    async def coordinated_checkpointing(self, checkpointing_interval):
+        while True:
+            await asyncio.sleep(checkpointing_interval)
+            await self.start_coordinated_checkpoint()
+
+    async def start_coordinated_checkpoint(self):
+        for worker_id in self.worker_ips.keys():
+            await self.networking.send_message(
+                self.worker_ips[worker_id], WORKER_PORT,
+                {
+                    "__COM_TYPE__": 'TAKE_COORDINATED_CHECKPOINT',
+                    "__MSG__": self.checkpoint_round
+                },
+                Serializer.MSGPACK
+            )
+        self.checkpoint_round = self.checkpoint_round + 1
+
     def init_snapshot_minio_bucket(self):
         try:
             if not self.minio_client.bucket_exists(SNAPSHOT_BUCKET_NAME):
@@ -323,6 +343,8 @@ class CoordinatorService:
                                 self.messages_sent_intervals[id][op] = {}
                                 self.messages_to_replay[id][op] = {}
                         logging.info(f"Submitted Stateflow Graph to Workers")
+                        if CHECKPOINT_PROTOCOL == 'COR':
+                            self.create_task(self.coordinated_checkpointing(5))
                     case 'REGISTER_WORKER':
                         # A worker registered to the coordinator
                         assigned_id = self.coordinator.register_worker(message)

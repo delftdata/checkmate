@@ -24,6 +24,7 @@ from worker.operator_state.stateless import Stateless
 from worker.run_func_payload import RunFuncPayload
 from worker.checkpointing.uncoordinated_checkpointing import UncoordinatedCheckpointing
 from worker.checkpointing.cic_checkpointing import CICCheckpointing
+from worker.checkpointing.coordinated_checkpointing import CoordinatedCheckpointing
 
 SERVER_PORT: int = 8888
 DISCOVERY_HOST: str = os.environ['DISCOVERY_HOST']
@@ -107,10 +108,13 @@ class Worker:
                 key=payload.request_id,
                 value=msgpack_serialization(kafka_response)
             ))
-        if send_from is not None and (self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC'):
-            # Necessary for uncoordinated checkpointing
-            incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
-            await self.checkpointing.set_last_messages_processed(payload.operator_name, incoming_channel, send_from['kafka_offset'])
+        if send_from is not None:
+            if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
+                # Necessary for uncoordinated checkpointing
+                incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
+                await self.checkpointing.set_last_messages_processed(payload.operator_name, incoming_channel, send_from['kafka_offset'])
+            elif self.checkpoint_protocol == 'COR':
+                await self.checkpointing.set_incoming_channels(payload.operator_name, send_from['sender_id'], send_from['operator_name'])
         return success
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
@@ -127,6 +131,8 @@ class Worker:
                     case 'CIC':
                         snapshot_data = await self.checkpointing.get_snapshot_data(operator, last_messages_sent)
                         snapshot_data['cic_clock'] = cic_clock
+                    case 'COR':
+                        snapshot_data = await self.checkpointing.get_snapshot_data(operator)
                     case _:
                         logging.warning('Unknown protocol, no snapshot data added.')
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
@@ -266,9 +272,7 @@ class Worker:
             f"Consumed: {msg.topic} {msg.partition} {msg.offset} "
             f"{msg.key} {msg.value} {msg.timestamp}"
         )
-        match self.checkpoint_protocol:
-            case 'UNC' | 'CIC':
-                self.checkpointing.set_consumed_offset(msg.topic, msg.partition, msg.offset)
+        self.checkpointing.set_consumed_offset(msg.topic, msg.partition, msg.offset)
         deserialized_data: dict = self.networking.decode_message(msg.value)
         # This data should be added to a replay kafka topic.
         message_type: str = deserialized_data['__COM_TYPE__']
@@ -288,6 +292,29 @@ class Worker:
         task = asyncio.create_task(coroutine)
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
+
+    async def checkpoint_coordinated_sources(self, sources):
+        for source in sources:
+            #Checkpoint the source operator
+            outgoing_channels = await self.checkpointing.get_outgoing_channels(source)
+            logging.warning(f'outgoing channels: {outgoing_channels}')
+            #Send marker on all outgoing channels
+            for (id, operator) in outgoing_channels:
+                self.create_task(self.send_marker(source, id, operator))
+
+    async def send_marker(self, source, id, operator):
+        if id not in self.peers.keys():
+            logging.warning('Unknown id in network')
+        else:
+            (host, port) = self.peers[id]
+            await self.networking.send_message(
+                host, port,
+                {
+                    "__COM_TYPE__": 'COORDINATED_MARKER',
+                    "__MSG__": (self.id, source, operator)
+                },
+                Serializer.MSGPACK
+            )
 
     async def worker_controller(self, deserialized_data, resp_adr):
         message_type: str = deserialized_data['__COM_TYPE__']
@@ -323,6 +350,19 @@ class Worker:
             case 'CHECKPOINT_PROTOCOL':
                 self.checkpoint_protocol = message
                 self.networking.set_checkpoint_protocol(message)
+            case 'TAKE_COORDINATED_CHECKPOINT':
+                if self.checkpoint_protocol == 'COR':
+                    sources = await self.checkpointing.get_source_operators()
+                    if len(sources) == 0:
+                        logging.warning('No source operators yet, nothing to checkpoint.')
+                    else:
+                        await self.checkpoint_coordinated_sources(sources)
+            case 'COORDINATED_MARKER':
+                all_markers_received = await self.checkpointing.marker_received(message)
+                if all_markers_received:
+                    checkpointing_done = await self.checkpointing.set_sink_operator(message[2])
+                    if checkpointing_done:
+                        logging.warning('Coordinated checkpointing round done.')
             case 'RECOVER_FROM_SNAPSHOT':
                 logging.warning(f'Recovery message received: {message}')
                 match self.checkpoint_protocol:
@@ -371,6 +411,7 @@ class Worker:
 
     async def handle_execution_plan(self, message):
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator = message
+        self.networking.set_id(self.id)
         self.waiting_for_exe_graph = False
         match self.checkpoint_protocol:
             case 'CIC':
@@ -381,6 +422,9 @@ class Worker:
                 self.checkpointing = UncoordinatedCheckpointing()
                 await self.checkpointing.set_id(self.id)
                 await self.checkpointing.init_attributes_per_operator(self.total_partitions_per_operator.keys())
+            case 'COR':
+                self.checkpointing = CoordinatedCheckpointing()
+                await self.checkpointing.set_id(self.id)
             case _:
                 logging.warning('Not supported value is set for CHECKPOINTING_PROTOCOL, continue without checkpoints.')
         self.networking.set_checkpointing(self.checkpointing)
@@ -397,6 +441,8 @@ class Worker:
             case 'UNC':
                 del self.peers[self.id]
                 self.create_task(self.uncoordinated_checkpointing(5))
+            case 'COR':
+                await self.checkpointing.set_peers(self.peers)
             case _:
                 logging.info('no checkpointing started.')
         await self.networking.set_total_partitions_per_operator(self.total_partitions_per_operator)
