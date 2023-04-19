@@ -70,6 +70,9 @@ class Worker:
         # CIC variables
         self.waiting_for_exe_graph = True
 
+        #Coordinated variables
+        self.notified_coordinator = False
+
     async def run_function(
             self,
             payload: RunFuncPayload,
@@ -118,7 +121,7 @@ class Worker:
         return success
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
-    async def take_snapshot(self, operator, cic_clock=0):
+    async def take_snapshot(self, operator, cic_clock=0, cor_round=-1):
         if isinstance(self.local_state, InMemoryOperatorState):
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
@@ -137,7 +140,9 @@ class Worker:
                         logging.warning('Unknown protocol, no snapshot data added.')
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
-            snapshot_time = time.time_ns() // 1000000
+            snapshot_time = cor_round
+            if snapshot_time == -1:
+                snapshot_time = time.time_ns() // 1000000
             snapshot_name: str = f"snapshot_{self.id}_{operator}_{snapshot_time}.bin"
             await self.minio_client_async.put_object(
                 bucket_name=SNAPSHOT_BUCKET_NAME,
@@ -145,18 +150,19 @@ class Worker:
                 data=io.BytesIO(bytes_file),
                 length=len(bytes_file)
             )
-            coordinator_info = {}
-            coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
-            coordinator_info['last_messages_sent'] = last_messages_sent
-            coordinator_info['snapshot_name'] = snapshot_name
-            await self.networking.send_message(
-                DISCOVERY_HOST, DISCOVERY_PORT,
-                {
-                    "__COM_TYPE__": 'SNAPSHOT_TAKEN',
-                    "__MSG__": coordinator_info
-                },
-                Serializer.MSGPACK
-            )
+            if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
+                coordinator_info = {}
+                coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
+                coordinator_info['last_messages_sent'] = last_messages_sent
+                coordinator_info['snapshot_name'] = snapshot_name
+                await self.networking.send_message(
+                    DISCOVERY_HOST, DISCOVERY_PORT,
+                    {
+                        "__COM_TYPE__": 'SNAPSHOT_TAKEN',
+                        "__MSG__": coordinator_info
+                    },
+                    Serializer.MSGPACK
+                )
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
@@ -280,6 +286,9 @@ class Worker:
         if message_type == 'RUN_FUN':
             run_func_payload: RunFuncPayload = self.unpack_run_payload(message, msg.key, timestamp=msg.timestamp)
             logging.info(f'RUNNING FUNCTION FROM KAFKA: {run_func_payload.function_name} {run_func_payload.key}')
+            if not self.notified_coordinator:
+                self.notified_coordinator = True
+                self.create_task(self.notify_coordinator())
             self.create_task(
                 self.run_function(
                     run_func_payload
@@ -288,21 +297,32 @@ class Worker:
         else:
             logging.error(f"Invalid message type: {message_type} passed to KAFKA")
 
+    async def notify_coordinator(self):
+        await self.networking.send_message(
+            DISCOVERY_HOST, DISCOVERY_PORT,
+            {
+                "__COM_TYPE__": 'STARTED_PROCESSING',
+                "__MSG__": self.id
+            },
+            Serializer.MSGPACK
+        )
+
     def create_task(self, coroutine):
         task = asyncio.create_task(coroutine)
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
 
-    async def checkpoint_coordinated_sources(self, sources):
+    async def checkpoint_coordinated_sources(self, sources, round):
         for source in sources:
             #Checkpoint the source operator
             outgoing_channels = await self.checkpointing.get_outgoing_channels(source)
-            logging.warning(f'outgoing channels: {outgoing_channels}')
+            #logging.warning(f'outgoing channels: {outgoing_channels}')
             #Send marker on all outgoing channels
+            await self.take_snapshot(source, cor_round=round)
             for (id, operator) in outgoing_channels:
-                self.create_task(self.send_marker(source, id, operator))
+                self.create_task(self.send_marker(source, id, operator, round))
 
-    async def send_marker(self, source, id, operator):
+    async def send_marker(self, source, id, operator, round):
         if id not in self.peers.keys():
             logging.warning('Unknown id in network')
         else:
@@ -311,7 +331,7 @@ class Worker:
                 host, port,
                 {
                     "__COM_TYPE__": 'COORDINATED_MARKER',
-                    "__MSG__": (self.id, source, operator)
+                    "__MSG__": (self.id, source, operator, round)
                 },
                 Serializer.MSGPACK
             )
@@ -356,13 +376,21 @@ class Worker:
                     if len(sources) == 0:
                         logging.warning('No source operators yet, nothing to checkpoint.')
                     else:
-                        await self.checkpoint_coordinated_sources(sources)
+                        await self.checkpoint_coordinated_sources(sources, message)
             case 'COORDINATED_MARKER':
                 all_markers_received = await self.checkpointing.marker_received(message)
                 if all_markers_received:
+                    await self.checkpoint_coordinated_sources([message[2]], message[3])
                     checkpointing_done = await self.checkpointing.set_sink_operator(message[2])
                     if checkpointing_done:
-                        logging.warning('Coordinated checkpointing round done.')
+                        await self.networking.send_message(
+                            DISCOVERY_HOST, DISCOVERY_PORT,
+                            {
+                                "__COM_TYPE__": 'COORDINATED_ROUND_DONE',
+                                "__MSG__": (self.id, message[3])
+                            },
+                            Serializer.MSGPACK
+                        )
             case 'RECOVER_FROM_SNAPSHOT':
                 logging.warning(f'Recovery message received: {message}')
                 match self.checkpoint_protocol:

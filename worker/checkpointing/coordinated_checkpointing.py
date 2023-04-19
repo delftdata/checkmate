@@ -55,7 +55,7 @@ class CoordinatedCheckpointing:
             self.incoming_channels[own_operator][(sender_id, sender_operator)] = False
 
     async def marker_received(self, message):
-        sender_id, sender_operator, own_operator = message
+        sender_id, sender_operator, own_operator, _ = message
         if own_operator in self.incoming_channels.keys() and (sender_id, sender_operator) in self.incoming_channels[own_operator].keys():
             self.incoming_channels[own_operator][(sender_id, sender_operator)] = True
             all_markers_received = True
@@ -72,7 +72,7 @@ class CoordinatedCheckpointing:
             return False
 
     async def set_sink_operator(self, operator):
-        logging.warning(f'sink operators: {self.sink_operators}')
+        #logging.warning(f'sink operators: {self.sink_operators}')
         if operator in self.sink_operators.keys():
             self.sink_operators[operator] = True
         all_sink_operators_checkpointed = True

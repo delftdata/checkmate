@@ -52,7 +52,11 @@ class CoordinatorService:
         self.messages_to_replay = {}
 
         #Coordinated approach
-        self.checkpoint_round = 0
+        self.checkpoint_round = -1
+        self.started_processing = {}
+        #Send out checkpointing, only when all workers are done, increase round and wait for next checkpointing.
+        self.done_checkpointing = {}
+        self.last_confirmed_checkpoint_round = -1
 
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
@@ -294,7 +298,9 @@ class CoordinatorService:
     async def coordinated_checkpointing(self, checkpointing_interval):
         while True:
             await asyncio.sleep(checkpointing_interval)
-            await self.start_coordinated_checkpoint()
+            if self.checkpoint_round == self.last_confirmed_checkpoint_round:
+                self.checkpoint_round = self.checkpoint_round + 1
+                await self.start_coordinated_checkpoint()
 
     async def start_coordinated_checkpoint(self):
         for worker_id in self.worker_ips.keys():
@@ -306,7 +312,6 @@ class CoordinatorService:
                 },
                 Serializer.MSGPACK
             )
-        self.checkpoint_round = self.checkpoint_round + 1
 
     def init_snapshot_minio_bucket(self):
         try:
@@ -343,8 +348,6 @@ class CoordinatorService:
                                 self.messages_sent_intervals[id][op] = {}
                                 self.messages_to_replay[id][op] = {}
                         logging.info(f"Submitted Stateflow Graph to Workers")
-                        if CHECKPOINT_PROTOCOL == 'COR':
-                            self.create_task(self.coordinated_checkpointing(5))
                     case 'REGISTER_WORKER':
                         # A worker registered to the coordinator
                         assigned_id = self.coordinator.register_worker(message)
@@ -356,6 +359,8 @@ class CoordinatorService:
                         self.messages_received_intervals[str(assigned_id)] = {}
                         self.messages_sent_intervals[str(assigned_id)] = {}
                         self.messages_to_replay[str(assigned_id)] = {}
+                        self.started_processing[assigned_id] = False
+                        self.done_checkpointing[assigned_id] = False
                         logging.info(f"Worker registered {message} with id {reply}")
                         await self.networking.send_message(
                             message, WORKER_PORT,
@@ -365,6 +370,24 @@ class CoordinatorService:
                             },
                             Serializer.MSGPACK
                         )
+                    case 'STARTED_PROCESSING':
+                        self.started_processing[message] = True
+                        start_checkpointing = True
+                        for id in self.started_processing.keys():
+                            start_checkpointing = start_checkpointing and self.started_processing[id]
+                        if start_checkpointing:
+                            logging.warning('All workers started processing, starting coordinated checkpointing.')
+                            self.create_task(self.coordinated_checkpointing(5))
+                    case 'COORDINATED_ROUND_DONE':
+                        self.done_checkpointing[message[0]] = True
+                        all_workers_done = True
+                        for id in self.done_checkpointing.keys():
+                            all_workers_done = all_workers_done and self.done_checkpointing[id]
+                        if all_workers_done:
+                            for id in self.done_checkpointing.keys():
+                                self.done_checkpointing[id] = False
+                            self.last_confirmed_checkpoint_round = message[1]
+                            logging.warning(f'Checkpointing round {message[1]} done')
                     case 'SNAPSHOT_TAKEN':
                         await self.process_snapshot_information(message)
                     case 'WORKER_FAILED':
