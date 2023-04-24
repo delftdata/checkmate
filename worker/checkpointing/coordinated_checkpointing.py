@@ -1,4 +1,5 @@
 from universalis.common.logging import logging
+from aiokafka import TopicPartition
 
 class CoordinatedCheckpointing:
     def __init__(self):
@@ -70,6 +71,13 @@ class CoordinatedCheckpointing:
         else:
             logging.warning('received marker from non-incoming channel.')
             return False
+        
+    async def check_marker_received(self, own_operator, sender_id, sender_op):
+        if own_operator in self.incoming_channels.keys():
+            if (sender_id, sender_op) in self.incoming_channels[own_operator].keys():
+                return self.incoming_channels[own_operator][(sender_id, sender_op)]
+        else:
+            return False
 
     async def set_sink_operator(self, operator):
         #logging.warning(f'sink operators: {self.sink_operators}')
@@ -84,6 +92,26 @@ class CoordinatedCheckpointing:
             return True
         else:
             return False
+        
+    async def get_partitions_to_reset(self, operator):
+        if operator not in self.last_kafka_consumed.keys():
+            return []
+        tp_to_reset = []
+        for partition in self.last_kafka_consumed[operator].keys():
+            tp_to_reset.append(TopicPartition(operator, int(partition)))
+        return tp_to_reset
+
+    async def find_kafka_to_replay(self, operator_name, last_kafka_consumed):
+        to_replay = []
+        if operator_name in self.last_kafka_consumed.keys():
+            for partition in self.last_kafka_consumed[operator_name]:
+                if partition in last_kafka_consumed:
+                    to_replay.append((TopicPartition(operator_name, int(partition)), last_kafka_consumed[partition] + 1))
+                else:
+                    last_kafka_consumed[partition] = 0
+                    to_replay.append((TopicPartition(operator_name, int(partition)), 0))
+            self.last_kafka_consumed[operator_name] = last_kafka_consumed
+        return to_replay
 
     def set_consumed_offset(self, topic, partition, offset):
         if topic not in self.source_operators:

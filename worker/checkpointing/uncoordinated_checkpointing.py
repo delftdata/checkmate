@@ -69,3 +69,4 @@ class UncoordinatedCheckpointing:
         tp_to_reset = []
         for partition in self.last_kafka_consumed[operator].keys():
             tp_to_reset.append(TopicPartition(operator, int(partition)))
+        return tp_to_reset

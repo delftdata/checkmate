@@ -72,6 +72,7 @@ class Worker:
 
         #Coordinated variables
         self.notified_coordinator = False
+        self.message_buffer = {}
 
     async def run_function(
             self,
@@ -139,6 +140,7 @@ class Worker:
                     case _:
                         logging.warning('Unknown protocol, no snapshot data added.')
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
+                logging.warning(f'Local state data for {operator}: {self.local_state.data[operator]}')
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
             snapshot_time = cor_round
             if snapshot_time == -1:
@@ -177,7 +179,11 @@ class Worker:
         last_kafka_consumed = {}
         if 'last_kafka_consumed' in deserialized_data.keys():
             last_kafka_consumed = deserialized_data['last_kafka_consumed']
-        to_replay = await self.checkpointing.restore_snapshot_data(operator_name, deserialized_data['last_messages_processed'], deserialized_data['last_messages_sent'], last_kafka_consumed)
+        to_replay = []
+        if self.checkpoint_protocol == 'COR':
+            to_replay = await self.checkpointing.find_kafka_to_replay(operator_name, last_kafka_consumed)
+        else:
+            to_replay = await self.checkpointing.restore_snapshot_data(operator_name, deserialized_data['last_messages_processed'], deserialized_data['last_messages_sent'], last_kafka_consumed)
         for (tp, offset) in to_replay:
             self.kafka_consumer.seek(tp, offset)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
@@ -262,7 +268,7 @@ class Worker:
         await self.networking.replay_message(receiver_info['host'], receiver_info['port'], deserialized_data)
 
     async def simple_failure(self):
-        await asyncio.sleep(200)
+        await asyncio.sleep(40)
         if self.id == 1:
             await self.networking.send_message(
                 DISCOVERY_HOST, DISCOVERY_PORT,
@@ -336,6 +342,13 @@ class Worker:
                 Serializer.MSGPACK
             )
 
+    async def process_message_buffer(self, operator):
+        if operator in self.message_buffer.keys():
+            for message in self.message_buffer[operator]:
+                payload = self.unpack_run_payload(message, message['__RQ_ID__'])
+                self.create_task(self.run_function(payload, send_from=message['__SENT_FROM__']))
+            self.message_buffer[operator] = []
+
     async def worker_controller(self, deserialized_data, resp_adr):
         message_type: str = deserialized_data['__COM_TYPE__']
         message = deserialized_data['__MSG__']
@@ -343,22 +356,26 @@ class Worker:
             case 'RUN_FUN_REMOTE' | 'RUN_FUN_RQ_RS_REMOTE':
                 request_id = message['__RQ_ID__']
                 if message_type == 'RUN_FUN_REMOTE':
-                    logging.info('CALLED RUN FUN FROM PEER')
-                    if self.checkpoint_protocol == 'CIC':
-                        oper_name = message['__OP_NAME__']
-                        # CHANGE TO CIC OBJECT
-                        cycle_detected, cic_clock = await self.checkpointing.cic_cycle_detection(oper_name, message['__CIC_DETAILS__'])
-                        if cycle_detected:
-                            logging.warning(f'Cycle detected for operator {oper_name}! Taking forced checkpoint.')
-                            # await self.networking.update_cic_checkpoint(oper_name)
-                            await self.take_snapshot(message['__OP_NAME__'], cic_clock=cic_clock)
                     sender_details = message['__SENT_FROM__']
-                    payload = self.unpack_run_payload(message, request_id)
-                    self.create_task(
-                        self.run_function(
-                            payload, send_from = sender_details
+                    if self.checkpoint_protocol == 'COR' and await self.checkpointing.check_marker_received(message['__OP_NAME__'], sender_details['sender_id'], sender_details['operator_name']):
+                        logging.warning('Buffering message!')
+                        self.message_buffer[message['__OP_NAME__']].append(message)
+                    else:
+                        logging.info('CALLED RUN FUN FROM PEER')
+                        if self.checkpoint_protocol == 'CIC':
+                            oper_name = message['__OP_NAME__']
+                            # CHANGE TO CIC OBJECT
+                            cycle_detected, cic_clock = await self.checkpointing.cic_cycle_detection(oper_name, message['__CIC_DETAILS__'])
+                            if cycle_detected:
+                                logging.warning(f'Cycle detected for operator {oper_name}! Taking forced checkpoint.')
+                                # await self.networking.update_cic_checkpoint(oper_name)
+                                await self.take_snapshot(message['__OP_NAME__'], cic_clock=cic_clock)
+                        payload = self.unpack_run_payload(message, request_id)
+                        self.create_task(
+                            self.run_function(
+                                payload, send_from = sender_details
+                            )
                         )
-                    )
                 else:
                     logging.info('CALLED RUN FUN RQ RS FROM PEER')
                     payload = self.unpack_run_payload(message, request_id, response_socket=resp_adr)
@@ -381,6 +398,7 @@ class Worker:
                 all_markers_received = await self.checkpointing.marker_received(message)
                 if all_markers_received:
                     await self.checkpoint_coordinated_sources([message[2]], message[3])
+                    await self.process_message_buffer(message[2])
                     checkpointing_done = await self.checkpointing.set_sink_operator(message[2])
                     if checkpointing_done:
                         await self.networking.send_message(
@@ -412,6 +430,18 @@ class Worker:
                             # Replay channels from corresponding offsets in message[1]
                             for channel in message[op_name][1].keys():
                                 await self.replay_from_kafka(channel, message[op_name][1][channel])
+                    case 'COR':
+                        for op_name in self.total_partitions_per_operator.keys():
+                            if message == -1:
+                                async with self.snapshot_state_lock:
+                                    self.local_state.data[op_name] = {}
+                                    tp_to_reset = await self.checkpointing.get_partitions_to_reset(op_name)
+                                    for tp in tp_to_reset:
+                                        self.kafka_consumer.seek(tp, 0)
+                            else:
+                                # Build the snapshot name from the recovery message received
+                                snapshot_to_restore = f'snapshot_{self.id}_{op_name}_{message}.bin'
+                                await self.restore_from_snapshot(snapshot_to_restore, op_name)
                     case _:
                         logging.warning('Snapshot restore message received for unknown protocol, no restoration.')
             case 'RECEIVE_EXE_PLN':  # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
@@ -452,6 +482,8 @@ class Worker:
                 await self.checkpointing.init_attributes_per_operator(self.total_partitions_per_operator.keys())
             case 'COR':
                 self.checkpointing = CoordinatedCheckpointing()
+                for op in self.total_partitions_per_operator.keys():
+                    self.message_buffer[op] = []
                 await self.checkpointing.set_id(self.id)
             case _:
                 logging.warning('Not supported value is set for CHECKPOINTING_PROTOCOL, continue without checkpoints.')

@@ -391,8 +391,19 @@ class CoordinatorService:
                     case 'SNAPSHOT_TAKEN':
                         await self.process_snapshot_information(message)
                     case 'WORKER_FAILED':
-                        logging.warning('Worker failed! Find recovery line.')
-                        await self.test_snapshot_recovery()
+                        if CHECKPOINT_PROTOCOL == 'COR':
+                            for worker_id in self.worker_ips.keys():
+                                await self.networking.send_message(
+                                    self.worker_ips[worker_id], WORKER_PORT,
+                                    {
+                                        "__COM_TYPE__": 'RECOVER_FROM_SNAPSHOT',
+                                        "__MSG__": self.last_confirmed_checkpoint_round
+                                    },
+                                    Serializer.MSGPACK
+                                )
+                        else:
+                            logging.warning('Worker failed! Find recovery line.')
+                            await self.test_snapshot_recovery()
                     case _:
                         # Any other message type
                         logging.error(f"COORDINATOR SERVER: Non supported message type: {message_type}")
