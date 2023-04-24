@@ -23,7 +23,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'COR'
+CHECKPOINT_PROTOCOL: str = 'CIC'
 
 class CoordinatorService:
 
@@ -403,7 +403,8 @@ class CoordinatorService:
                                 )
                         else:
                             logging.warning('Worker failed! Find recovery line.')
-                            await self.test_snapshot_recovery()
+                            if CHECKPOINT_PROTOCOL in ('COR', 'UNC', 'CIC'):
+                                await self.test_snapshot_recovery()
                     case _:
                         # Any other message type
                         logging.error(f"COORDINATOR SERVER: Non supported message type: {message_type}")

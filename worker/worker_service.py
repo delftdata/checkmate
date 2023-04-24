@@ -284,7 +284,8 @@ class Worker:
             f"Consumed: {msg.topic} {msg.partition} {msg.offset} "
             f"{msg.key} {msg.value} {msg.timestamp}"
         )
-        self.checkpointing.set_consumed_offset(msg.topic, msg.partition, msg.offset)
+        if self.checkpointing is not None:
+            self.checkpointing.set_consumed_offset(msg.topic, msg.partition, msg.offset)
         deserialized_data: dict = self.networking.decode_message(msg.value)
         # This data should be added to a replay kafka topic.
         message_type: str = deserialized_data['__COM_TYPE__']
