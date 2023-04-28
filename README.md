@@ -5,15 +5,15 @@ Benchmarking checkpointing algorithms for stream processing as a master thesis b
 
 ### Kafka
 
-To run kafka: `docker-compose -f docker-compose-kafka.yml up`
+To run kafka: `docker compose -f docker-compose-kafka.yml up`
 
-To clear kafka: `docker-compose -f docker-compose-kafka.yml down --volumes`
+To clear kafka: `docker compose -f docker-compose-kafka.yml down --volumes`
 
 ### STYX
 
-To run styx: `docker-compose up --build --scale worker=2`
+To run styx: `docker compose up --build --scale worker=2`
 
-To clear styx: `docker-compose down --volumes`
+To clear styx: `docker compose down --volumes`
 
 
 ### Demo
