@@ -4,9 +4,11 @@ from universalis.common.logging import logging
 windowed_sum_operator = Operator('windowed_sum', n_partitions=6)
 
 @windowed_sum_operator.register
-async def sum(ctx: StatefulFunction, timestamp: float , window: list):
-    sum = 0
-    logging.warning(window)
-    for item in window:
-        sum+=item
-    return (timestamp, sum)
+async def windowed_sum(ctx: StatefulFunction, timestamp: float , window: list):
+    # return (timestamp, ctx.key, sum(window))
+    ctx.call_remote_async(
+            operator_name='sum_all',
+            function_name='sum_all',
+            key=1,
+            params=(timestamp, 1, sum(window),)
+    )

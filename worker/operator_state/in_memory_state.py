@@ -1,3 +1,5 @@
+import asyncio
+
 from typing import Any
 
 from universalis.common.base_state import BaseOperatorState
@@ -10,8 +12,15 @@ class InMemoryOperatorState(BaseOperatorState):
     def __init__(self, operator_names: set[str]):
         super().__init__(operator_names)
         self.data = {}
+        self.locks = {}
         for operator_name in operator_names:
             self.data[operator_name] = {}
+            self.locks[operator_name] = {}
+
+    def get_lock(self, key, operator_name: str) -> asyncio.Lock:
+        if key not in self.locks[operator_name]:
+            self.locks[operator_name][key] = asyncio.Lock()
+        return self.locks[operator_name][key]
 
     async def put(self, key, value, operator_name: str):
         self.data[operator_name][key] = value

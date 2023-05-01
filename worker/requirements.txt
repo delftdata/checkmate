@@ -1,16 +1,16 @@
 # networking service
 uvloop==0.17.0
-msgpack==1.0.5
-cloudpickle==2.2.1
+msgpack==1.0.4
+cloudpickle==2.2.0
 lz4==4.0.2
-pyzmq==25.0.2
-aiozmq==1.0.0
+pyzmq==24.0.1
+aiozmq==0.9.0
 # monitoring service
 # psutil==5.9.2
 # Redis
 redis==4.3.4
 # Kafka
-aiokafka==0.8.0
+aiokafka==0.7.2
 # snapshots
 minio==7.1.12
 miniopy-async==1.9

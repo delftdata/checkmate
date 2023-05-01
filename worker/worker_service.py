@@ -565,7 +565,7 @@ class Worker:
             if '__COM_TYPE__' not in deserialized_data:
                 logging.error(f"Deserialized data do not contain a message type")
             else:
-                await self.worker_controller(deserialized_data, resp_adr)
+                self.create_task(self.worker_controller(deserialized_data, resp_adr))
 
     @staticmethod
     def unpack_run_payload(
