@@ -104,7 +104,14 @@ import java.util.*;
  *      Optional parameters
  *          kafka-server: STRING ("kafka-service:9092")
  *                Kafka server location. Default value: "kafka-service:9092"
+ *          uni-bids-partitions (6): Int
+ *                Number of partitions for the bids source operators in universalis. Default value: 6
+ *          uni-persons-partitions (6): Int
+ *                Number of partitions for the persons source operators in universalis. Default value: 6
+ *          uni-auctions-partitions (6): Int
+ *                Number of partitions for the auctions source operators in universalis. Default value: 6
  *
+ * 
  *   Generator setup
  *          iteration-duration-ms (60000): Int
  *                Duration of an iteration in ms. An iteration is the period in which a specific input rate from the
@@ -178,6 +185,11 @@ public class BidPersonGeneratorKafka {
 
         int generatorParallelism = params.getInt("generator-parallelism", 1);
 
+        // Universalis partitioning
+        int uniBidsPartitions = params.getInt("uni-bids-partitions", 6);
+        int uniPersonsPartitions = params.getInt("uni-persons-partitions", 6);
+        int uniAuctionsPartitions = params.getInt("uni-auctions-partitions", 6);
+
         Set<String> remainingParameters = params.getUnrequestedParameters();
         if (remainingParameters.size() > 0) {
             System.out.println("Warning: did not recognize the following parameters: " + String.join(",", remainingParameters));
@@ -192,7 +204,8 @@ public class BidPersonGeneratorKafka {
         // Creating producer
 
         BidPersonAuctionSourceParallelManager sourceManager = new BidPersonAuctionSourceParallelManager(kafkaServer,
-                epochDurationMs, personTopicEnabled, auctionTopicEnabled, bidsTopicEnabled, generatorParallelism);
+                epochDurationMs, personTopicEnabled, auctionTopicEnabled, bidsTopicEnabled, generatorParallelism, 
+                uniBidsPartitions, uniAuctionsPartitions, uniPersonsPartitions);
 
         // Starting iteration
         long start_time = System.currentTimeMillis();

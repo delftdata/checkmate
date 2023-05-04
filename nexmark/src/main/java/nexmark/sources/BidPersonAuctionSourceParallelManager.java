@@ -21,19 +21,26 @@ public class BidPersonAuctionSourceParallelManager {
      * @param enableAuctionTopic Whether to generate auction records.
      * @param enableBidTopic Whether to generate bid records.
      * @param parallelism The total amount of BidPersonAuctionSource functions.
+     * @param uniBidsPartitions The partitions of the universalis Bids source operator
+     * @param uniAuctionsPartitions The partitions of the universalis Auctions source operator
+     * @param uniPersonsPartitions The partitions of the universalis Persons source operator
      */
     public BidPersonAuctionSourceParallelManager(String kafkaServer,
                                                  long epochDurationMs,
                                                  boolean enablePersonTopic,
                                                  boolean enableAuctionTopic,
                                                  boolean enableBidTopic,
-                                                 int parallelism) {
+                                                 int parallelism,
+                                                 int uniBidsPartitions,
+                                                 int uniAuctionsPartitions,
+                                                 int uniPersonsPartitions) {
         this.parallelism = parallelism;
         this.epochDurationMs = epochDurationMs;
         this.sourceFunctions = new ArrayList<>();
         for (int i = 0; i < this.parallelism; i++) {
             this.sourceFunctions.add(new BidPersonAuctionSourceParallelFunction(kafkaServer, epochDurationMs,
-                    enablePersonTopic, enableAuctionTopic, enableBidTopic, parallelism, i));
+                    enablePersonTopic, enableAuctionTopic, enableBidTopic, parallelism, i,
+                    uniBidsPartitions, uniAuctionsPartitions, uniPersonsPartitions));
         }
     }
 

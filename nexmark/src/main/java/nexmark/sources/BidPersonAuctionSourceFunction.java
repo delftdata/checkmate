@@ -11,8 +11,15 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 
+import java.io.IOException;
 import java.util.Properties;
 import java.util.Random;
+import org.msgpack.core.MessageBufferPacker;
+import org.msgpack.core.MessagePack;
+import org.apache.beam.sdk.nexmark.model.Auction;
+import org.apache.beam.sdk.nexmark.model.Bid;
+import org.apache.beam.sdk.nexmark.model.Person;
+
 
 /**
  * BidPersonAuctionSourceFunction contains all functionality expected for a generator for Bids, Auctions and person
@@ -38,7 +45,12 @@ public class BidPersonAuctionSourceFunction extends Thread {
     boolean enableAuctionTopic;
     boolean enableBidTopic;
 
+    int uniPersonsPartitions;
+    int uniAuctionsPartitions;
+    int uniBidsPartitions;
+
     int stoppedIterationNumber;
+
 
     /**
      * Constructor of BidPersonAuctionSourceFunction
@@ -52,7 +64,10 @@ public class BidPersonAuctionSourceFunction extends Thread {
                                           long epochDurationMs,
                                           boolean enablePersonTopic,
                                           boolean enableAuctionTopic,
-                                          boolean enableBidTopic){
+                                          boolean enableBidTopic,
+                                          int uniBidsPartitions, 
+                                          int uniAuctionsPartitions, 
+                                          int uniPersonsPartitions){
         // Create producer
         if (kafkaServer != null) {
             // Not in testing environment
@@ -100,6 +115,12 @@ public class BidPersonAuctionSourceFunction extends Thread {
 
         // Highest iteration number that is stopped
         this.stoppedIterationNumber = 0;
+
+        // Set universalis source partitions
+        this.uniBidsPartitions = uniBidsPartitions;
+        this.uniAuctionsPartitions = uniAuctionsPartitions;
+        this.uniPersonsPartitions = uniPersonsPartitions;
+
     }
 
     /**
@@ -255,7 +276,7 @@ public class BidPersonAuctionSourceFunction extends Thread {
                 if (offset < GeneratorConfig.PERSON_PROPORTION) {
                     if (this.enablePersonTopic) {
                         // produce topic if enabled
-                        this.producePersonEvent(eventId, rnd, timestampMs);
+                        this.producePersonEvent(eventId, rnd, timestampMs, this.uniPersonsPartitions);
                         remainingEpochEvents--;
                     } else {
                         // if not enabled, skip ID's concerning the topic.
@@ -265,7 +286,7 @@ public class BidPersonAuctionSourceFunction extends Thread {
                 } else if (offset < GeneratorConfig.PERSON_PROPORTION + GeneratorConfig.AUCTION_PROPORTION) {
                     if (this.enableAuctionTopic) {
                         // produce topic if enabled
-                        this.produceAuctionEvent(eventNumber, eventId, rnd, timestampMs);
+                        this.produceAuctionEvent(eventNumber, eventId, rnd, timestampMs, this.uniAuctionsPartitions);
                         remainingEpochEvents--;
                     } else {
                         // if not enabled, skip ID's concerning the topic
@@ -275,7 +296,7 @@ public class BidPersonAuctionSourceFunction extends Thread {
                 } else {
                     if (this.enableBidTopic) {
                         // produce topic if enabled
-                        this.produceBidEvent(eventId, rnd, timestampMs);
+                        this.produceBidEvent(eventId, rnd, timestampMs, this.uniBidsPartitions);
                         remainingEpochEvents--;
                     } else {
                         // if not enabled, skip ID's concerning the topic
@@ -300,7 +321,13 @@ public class BidPersonAuctionSourceFunction extends Thread {
      * @param eventTimestampMs Timestamp of the event.
      * @throws JsonProcessingException Exception thrown by objectMapper.
      */
-    public void producePersonEvent(long eventId, Random rnd, long eventTimestampMs) throws JsonProcessingException {
+    public void producePersonEvent(long eventId, Random rnd, long eventTimestampMs, int partitionNum) throws JsonProcessingException {
+        
+        int uniPartition = partitionNum;
+        Person person = PersonGenerator.nextPerson(eventId, rnd, eventTimestampMs, this.generatorConfig);
+        
+        MessageBufferPacker packer = MessagePack.newDefaultBufferPacker();
+
         this.producer.send(new ProducerRecord<String, byte[]>(
                 this.PERSON_TOPIC,
                 this.objectMapper.writeValueAsBytes(PersonGenerator.nextPerson(
@@ -319,7 +346,7 @@ public class BidPersonAuctionSourceFunction extends Thread {
      * @param eventTimestampMs Timestamp of the event.
      * @throws JsonProcessingException Exception thrown by objectMapper.
      */
-    public void produceAuctionEvent(long eventId, long eventNumber, Random rnd, long eventTimestampMs) throws JsonProcessingException{
+    public void produceAuctionEvent(long eventId, long eventNumber, Random rnd, long eventTimestampMs, int uniAuctionsPartitions) throws JsonProcessingException{
         this.producer.send(new ProducerRecord<String, byte[]>(
                 this.AUCTION_TOPIC,
                 objectMapper.writeValueAsBytes(AuctionGenerator.nextAuction(
@@ -339,7 +366,7 @@ public class BidPersonAuctionSourceFunction extends Thread {
      * @param eventTimestampMs Timestamp of the event.
      * @throws JsonProcessingException Exception thrown by objectMapper.
      */
-    public void produceBidEvent(long eventId, Random rnd, long eventTimestampMs) throws JsonProcessingException{
+    public void produceBidEvent(long eventId, Random rnd, long eventTimestampMs, int uniBidsPartitions) throws JsonProcessingException{
         this.producer.send(new ProducerRecord<String, byte[]>(
                 this.BID_TOPIC,
                 objectMapper.writeValueAsBytes(BidGenerator.nextBid(
@@ -349,6 +376,84 @@ public class BidPersonAuctionSourceFunction extends Thread {
                         this.generatorConfig)
                 )
         ));
+    }
+
+
+    public <E> MessageBufferPacker packEvent(E event, int uniEventPartitions) throws IOException{
+
+        MessageBufferPacker packer = MessagePack.newDefaultBufferPacker();
+        packer
+            .packMapHeader(2)
+            .packString("__COM_TYPE__")
+            .packString("RUN_FUN")
+            .packString("__MSG__")
+            .packMapHeader(5)
+            .packString("__OP_NAME__");
+
+        if(event instanceof Person){
+            packer.packString("personsSource");
+        }
+        else if(event instanceof Auction){
+            packer.packString("auctionsSource");
+        }
+        else{
+            packer.packString("bidsSource");
+        }
+        
+        packer
+            .packString("__KEY__")
+            .packInt(1)
+            .packString("__FUN_NAME")
+            .packString("read")
+            .packString("__PARAMS__");
+
+        if(event instanceof Person){
+            Person person = (Person) event; 
+            packer
+                .packArrayHeader(8)
+                .packLong(person.id)
+                .packString(person.name)
+                .packString(person.emailAddress)
+                .packString(person.creditCard)
+                .packString(person.city)
+                .packString(person.state)
+                .packLong(person.dateTime)
+                .packString(person.extra)
+            ;
+        }
+        else if(event instanceof Auction){
+            Auction auction = (Auction) event;
+            packer
+                .packArrayHeader(10)
+                .packLong(auction.id)
+                .packString(auction.itemName)
+                .packString(auction.description)
+                .packLong(auction.initialBid)
+                .packLong(auction.reserve)
+                .packLong(auction.dateTime)
+                .packLong(auction.expires)
+                .packLong(auction.seller)
+                .packLong(auction.category)
+                .packString(auction.extra)
+            ;
+        }
+        else{
+            Bid bid = (Bid) event;
+            packer
+                .packArrayHeader(5)
+                .packLong(bid.auction)
+                .packLong(bid.bidder)
+                .packLong(bid.price)
+                .packLong(bid.dateTime)
+                .packString(bid.extra)
+            ;
+        }
+
+        packer
+            .packString("__PARTITION__")
+            .packInt(uniEventPartitions);
+
+        return null;
     }
 
 }

@@ -149,6 +149,39 @@ public class LoadPatternGenerator {
         return loadPattern;
     }
 
+
+    /**
+     * Custom parameters:
+     *      initial-round-length: INT
+     *          Length of the initial round
+     *      regular-round-length: INT
+     *          Length of the regular round
+     *      round-rates: LIST[INT], as comma seperated line: 1, 2, 3, 4
+     *          List of rates that should be generated after the provided periods of time.
+     *      max-noise: INT
+     *          Maximum amount of noise to be added to the input rate.
+     * @param query Query to generate the pattern for
+     * @param experimentLength length of the experiment
+     * @param useDefaultConfigurations Whether to use the default configurations.
+     * @param params ParameterTool to fetch remaining parameters from.
+     * @return A loadPattern following the provided cosine pattern.
+     */
+    static LoadPattern getStaticLoadPattern(int query, int experimentLength, boolean useDefaultConfigurations,
+                                                 ParameterTool params) {
+        StaticLoadPattern loadPattern;
+        if (useDefaultConfigurations) {
+            loadPattern = new StaticLoadPattern(query, experimentLength);
+        } else {
+            int rate = params.getInt("rate");
+            int maxNoise = params.getInt("max-noise");
+            loadPattern = new StaticLoadPattern(query, experimentLength, rate, maxNoise);
+        }
+        LoadPatternGenerator.parseSpikeConfigurations(params, loadPattern);
+        return loadPattern;
+    }
+
+
+
     /**
      * Custom parameters:
      *   initial-input-rate: INT
@@ -312,6 +345,10 @@ public class LoadPatternGenerator {
             }
             case "convergence": {
                 loadPattern = LoadPatternGenerator.getConvergenceLoadPattern(query, experimentLength, useDefaultConfiguration, params);
+                break;
+            }
+            case "static": {
+                loadPattern = LoadPatternGenerator.getStaticLoadPattern(query, experimentLength, useDefaultConfiguration, params);
                 break;
             }
             default: {
