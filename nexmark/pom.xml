@@ -79,9 +79,9 @@
 						<descriptorRef>jar-with-dependencies</descriptorRef>
 					</descriptorRefs>
 					<archive>
-						<manifestEntries>
-							<program-class>nexmark.sources.BidPersonGeneratorKafka</program-class>
-						</manifestEntries>
+						<manifest>
+							<mainClass>nexmark.sources.BidPersonGeneratorKafka</mainClass>
+						</manifest>
 					</archive>
 				</configuration>
 				<executions>
@@ -117,14 +117,12 @@
 						</goals>
 						<configuration>
 							<classifier>NexMark</classifier>
-
 							<archive>
-								<manifestEntries>
-									<program-class>nexmark.sources.BidPersonGeneratorKafka</program-class>
-								</manifestEntries>
+								<manifest>
+									<mainClass>nexmark.sources.BidPersonGeneratorKafka</mainClass>
+								</manifest>
 							</archive>
 							<classifier>NexMark</classifier>
-
 						</configuration>
 					</execution>
 				</executions>

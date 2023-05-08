@@ -12,10 +12,14 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Properties;
 import java.util.Random;
 import org.msgpack.core.MessageBufferPacker;
 import org.msgpack.core.MessagePack;
+
+import java.util.UUID;  
+
 import org.apache.beam.sdk.nexmark.model.Auction;
 import org.apache.beam.sdk.nexmark.model.Bid;
 import org.apache.beam.sdk.nexmark.model.Person;
@@ -27,11 +31,11 @@ import org.apache.beam.sdk.nexmark.model.Person;
  * functions.
  */
 public class BidPersonAuctionSourceFunction extends Thread {
-    String PERSON_TOPIC = "person_topic";
-    String BID_TOPIC = "bids_topic";
-    String AUCTION_TOPIC = "auction_topic";
+    String PERSON_TOPIC = "person_source";
+    String BID_TOPIC = "bids_source";
+    String AUCTION_TOPIC = "auction_source";
 
-    Producer<String, byte[]> producer;
+    Producer<byte[], byte[]> producer;
     ObjectMapper objectMapper;
     GeneratorConfig generatorConfig;
 
@@ -78,7 +82,7 @@ public class BidPersonAuctionSourceFunction extends Thread {
             props.put("linger.ms", "10");
             props.put("compression.type", "lz4");
             props.put("batch.size", "50000");
-            props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+            props.put("key.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer");
             props.put("value.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer");
             this.producer = new KafkaProducer<>(props);
         }
@@ -249,10 +253,11 @@ public class BidPersonAuctionSourceFunction extends Thread {
      public void generatePortionOfEpochEvents(long totalEpochEvents, long firstEventIndex, long eventsToGenerate,
                                               int currentIterationNumber) throws JsonProcessingException {
          int totalIdIncrease = this.getTotalIdIncrease(totalEpochEvents);
+         System.out.println("before next epoch settings");
          this.setNextEpochSettings(totalIdIncrease);
          int beforeIdIncrease = this.getTotalIdIncrease(firstEventIndex);
          this.incrementEventNumber(beforeIdIncrease);
-
+         System.out.println("before generate events");
          this.generateEvents(eventsToGenerate, currentIterationNumber);
      }
 
@@ -321,22 +326,35 @@ public class BidPersonAuctionSourceFunction extends Thread {
      * @param eventTimestampMs Timestamp of the event.
      * @throws JsonProcessingException Exception thrown by objectMapper.
      */
-    public void producePersonEvent(long eventId, Random rnd, long eventTimestampMs, int partitionNum) throws JsonProcessingException {
+    public void producePersonEvent(long eventId, Random rnd, long eventTimestampMs, int uniPersonsPartitions) throws JsonProcessingException {
         
-        int uniPartition = partitionNum;
         Person person = PersonGenerator.nextPerson(eventId, rnd, eventTimestampMs, this.generatorConfig);
-        
-        MessageBufferPacker packer = MessagePack.newDefaultBufferPacker();
 
-        this.producer.send(new ProducerRecord<String, byte[]>(
+        int partition = (int) (eventId % uniPersonsPartitions);
+
+        try {
+            byte[] serByteArray = {Integer.valueOf(0).byteValue(), Integer.valueOf(1).byteValue()};
+            byte[] msgByteArray = packEvent(person, eventId, partition).toByteArray();
+            ByteBuffer buff = ByteBuffer.wrap(new byte[ serByteArray.length + msgByteArray.length]);
+            buff.put(serByteArray);
+            buff.put(msgByteArray);
+
+            MessageBufferPacker keyPacker = MessagePack.newDefaultBufferPacker();
+            keyPacker.packLong(UUID.randomUUID().getMostSignificantBits());
+            byte[] key = keyPacker.toByteArray();
+
+            this.producer.send(new ProducerRecord<byte[], byte[]>(
                 this.PERSON_TOPIC,
-                this.objectMapper.writeValueAsBytes(PersonGenerator.nextPerson(
-                        eventId,
-                        rnd,
-                        eventTimestampMs,
-                        this.generatorConfig)
-                )
-        ));
+                partition,
+                key,
+                buff.array()
+            ));
+
+        } catch (Exception e) {
+            System.out.println(e.getMessage());
+            System.exit(1000);
+        }
+
     }
     /**
      * Produce a person event
@@ -347,16 +365,33 @@ public class BidPersonAuctionSourceFunction extends Thread {
      * @throws JsonProcessingException Exception thrown by objectMapper.
      */
     public void produceAuctionEvent(long eventId, long eventNumber, Random rnd, long eventTimestampMs, int uniAuctionsPartitions) throws JsonProcessingException{
-        this.producer.send(new ProducerRecord<String, byte[]>(
+        
+        Auction auction = AuctionGenerator.nextAuction(eventNumber, eventId, rnd, eventTimestampMs, this.generatorConfig);
+
+        int partition = (int) (eventId % uniAuctionsPartitions);
+
+        try {
+            byte[] serByteArray = {Integer.valueOf(0).byteValue(), Integer.valueOf(1).byteValue()};
+            byte[] msgByteArray = packEvent(auction, eventId, partition).toByteArray();
+            ByteBuffer buff = ByteBuffer.wrap(new byte[ serByteArray.length + msgByteArray.length]);
+            buff.put(serByteArray);
+            buff.put(msgByteArray);
+
+            MessageBufferPacker keyPacker = MessagePack.newDefaultBufferPacker();
+            keyPacker.packLong(UUID.randomUUID().getMostSignificantBits());
+            byte[] key = keyPacker.toByteArray();
+
+            this.producer.send(new ProducerRecord<byte[], byte[]>(
                 this.AUCTION_TOPIC,
-                objectMapper.writeValueAsBytes(AuctionGenerator.nextAuction(
-                        eventNumber,
-                        eventId,
-                        rnd,
-                        eventTimestampMs,
-                        this.generatorConfig)
-                )
-        ));
+                partition,
+                key,
+                buff.array()
+            ));
+
+        } catch (Exception e) {
+            e.printStackTrace();;
+            System.exit(-1);
+        }
     }
 
     /**
@@ -367,19 +402,36 @@ public class BidPersonAuctionSourceFunction extends Thread {
      * @throws JsonProcessingException Exception thrown by objectMapper.
      */
     public void produceBidEvent(long eventId, Random rnd, long eventTimestampMs, int uniBidsPartitions) throws JsonProcessingException{
-        this.producer.send(new ProducerRecord<String, byte[]>(
+        
+        Bid bid = BidGenerator.nextBid(eventId, rnd, eventTimestampMs, this.generatorConfig);
+        int partition = (int) (eventId % uniBidsPartitions);
+
+        try {
+            byte[] serByteArray = {Integer.valueOf(0).byteValue(), Integer.valueOf(1).byteValue()};
+            byte[] msgByteArray = packEvent(bid, eventId, partition).toByteArray();
+            ByteBuffer buff = ByteBuffer.wrap(new byte[ serByteArray.length + msgByteArray.length]);
+            buff.put(serByteArray);
+            buff.put(msgByteArray);
+
+            MessageBufferPacker keyPacker = MessagePack.newDefaultBufferPacker();
+            keyPacker.packLong(UUID.randomUUID().getMostSignificantBits());
+            byte[] key = keyPacker.toByteArray();
+
+            this.producer.send(new ProducerRecord<byte[], byte[]>(
                 this.BID_TOPIC,
-                objectMapper.writeValueAsBytes(BidGenerator.nextBid(
-                        eventId,
-                        rnd,
-                        eventTimestampMs,
-                        this.generatorConfig)
-                )
-        ));
+                partition,
+                key,
+                buff.array()
+            ));
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(-1);
+        }
     }
 
 
-    public <E> MessageBufferPacker packEvent(E event, int uniEventPartitions) throws IOException{
+    public <E> MessageBufferPacker packEvent(E event, long key, int uniEventPartitions) throws IOException{
 
         MessageBufferPacker packer = MessagePack.newDefaultBufferPacker();
         packer
@@ -391,19 +443,19 @@ public class BidPersonAuctionSourceFunction extends Thread {
             .packString("__OP_NAME__");
 
         if(event instanceof Person){
-            packer.packString("personsSource");
+            packer.packString("persons_source");
         }
         else if(event instanceof Auction){
-            packer.packString("auctionsSource");
+            packer.packString("auctions_source");
         }
         else{
-            packer.packString("bidsSource");
+            packer.packString("bids_source");
         }
         
         packer
             .packString("__KEY__")
-            .packInt(1)
-            .packString("__FUN_NAME")
+            .packLong(key)
+            .packString("__FUN_NAME__")
             .packString("read")
             .packString("__PARAMS__");
 
@@ -453,7 +505,7 @@ public class BidPersonAuctionSourceFunction extends Thread {
             .packString("__PARTITION__")
             .packInt(uniEventPartitions);
 
-        return null;
+        return packer;
     }
 
 }
