@@ -2,13 +2,19 @@ import asyncio
 import dataclasses
 import struct
 import socket
+import time
+import os
 
 import zmq
 from aiozmq import create_zmq_stream, ZmqStream
+from aiokafka import AIOKafkaProducer
+from kafka.errors import KafkaConnectionError
 
 from .logging import logging
 from .serialization import Serializer, msgpack_serialization, msgpack_deserialization, \
     cloudpickle_serialization, cloudpickle_deserialization
+
+KAFKA_URL: str = os.getenv('KAFKA_URL', None)
 
 
 @dataclasses.dataclass
@@ -49,10 +55,57 @@ class SocketPool:
 
 class NetworkingManager:
 
+    kafka_producer: AIOKafkaProducer
+
     def __init__(self):
         self.pools: dict[tuple[str, int], SocketPool] = {}  # HERE BETTER TO ADD A CONNECTION POOL
         self.get_socket_lock = asyncio.Lock()
         self.host_name: str = str(socket.gethostbyname(socket.gethostname()))
+        self.last_messages_sent = {}
+        self.total_partitions_per_operator = {}
+
+        self.id = -1
+
+        self.checkpointing = None
+        self.checkpoint_protocol = None
+
+    def set_id(self, id):
+        self.id = id
+
+    def set_checkpoint_protocol(self, protocol):
+        self.checkpoint_protocol = protocol
+
+    def set_checkpointing(self, checkpointing):
+        self.checkpointing = checkpointing
+
+    async def start_kafka_producer(self):
+        # Set the batch_size and linger_ms to a high number and use manual flushes to commit to kafka.
+        self.kafka_producer = AIOKafkaProducer(bootstrap_servers=[KAFKA_URL],
+                                               enable_idempotence=True,
+                                               acks='all')
+        while True:
+            try:
+                await self.kafka_producer.start()
+            except KafkaConnectionError:
+                time.sleep(1)
+                logging.info("Waiting for Kafka networking producer")
+                continue
+            break
+        logging.info(f'KAFKA PRODUCER STARTED FOR NETWORKING')
+
+    async def flush_kafka_buffer(self, operator):
+        last_msg_sent = self.last_messages_sent[operator]
+        self.last_messages_sent[operator] = {}
+        await self.kafka_producer.flush()
+        return last_msg_sent
+
+    async def stop_kafka_producer(self):
+        await self.kafka_producer.stop()
+
+    async def set_total_partitions_per_operator(self, par_per_op):
+        self.total_partitions_per_operator = par_per_op
+        for key in par_per_op.keys():
+            self.last_messages_sent[key] = {}
 
     def close_all_connections(self):
         for pool in self.pools.values():
@@ -72,7 +125,47 @@ class NetworkingManager:
                            host,
                            port,
                            msg: dict[str, object],
-                           serializer: Serializer = Serializer.CLOUDPICKLE):
+                           serializer: Serializer = Serializer.CLOUDPICKLE,
+                           sending_name=None,
+                           sending_partition=None):
+        async with self.get_socket_lock:
+            if (host, port) not in self.pools:
+                await self.create_socket_connection(host, port)
+            socket_conn = next(self.pools[(host, port)])
+        sender_details = {
+            'operator_name': sending_name,
+            'operator_partition': sending_partition,
+            'sender_id': self.id,
+            'kafka_offset': None
+        }
+        receiver_details = {
+            'host': host,
+            'port': port
+        }
+        if msg['__COM_TYPE__'] == 'RUN_FUN_REMOTE':
+            msg['__MSG__']['__CIC_DETAILS__'] = {}
+            if self.checkpoint_protocol == 'CIC':
+                msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, sending_name, msg['__MSG__']['__OP_NAME__'])
+            msg['__MSG__']['__SENT_FROM__'] = sender_details
+            msg['__MSG__']['__SENT_TO__'] = receiver_details
+            receiving_name = msg['__MSG__']['__OP_NAME__']
+            receiving_partition = msg['__MSG__']['__PARTITION__']
+            kafka_data = await self.kafka_producer.send_and_wait(sending_name+receiving_name,
+                                                      value=self.encode_message(msg, serializer),
+                                                      partition=sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)
+            msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
+            self.last_messages_sent[sending_name][sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
+            if self.checkpoint_protocol == 'COR':
+                await self.checkpointing.set_outgoing_channels(sending_name, host, port, receiving_name)
+        msg = self.encode_message(msg, serializer)
+        socket_conn.zmq_socket.write((msg, ))
+
+    async def replay_message(self,
+                             host,
+                             port,
+                             msg,
+                             serializer: Serializer = Serializer.CLOUDPICKLE):
+        # Replays a message without logging anything
         async with self.get_socket_lock:
             if (host, port) not in self.pools:
                 await self.create_socket_connection(host, port)

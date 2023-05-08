@@ -13,8 +13,7 @@ COPY --chown=universalis:universalis universalis-package /var/local/universalis-
 
 ENV PATH="/usr/local/universalis/.local/bin:${PATH}"
 
-RUN pip install --upgrade pip \
-    && pip install --user -r /var/local/universalis/requirements.txt \
+RUN pip install --user -r /var/local/universalis/requirements.txt \
     && pip install --user ./var/local/universalis-package/
 
 WORKDIR /usr/local/universalis

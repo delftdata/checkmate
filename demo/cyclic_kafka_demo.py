@@ -43,8 +43,8 @@ async def main():
         key = random.randint(0, 6)
         tasks.append(universalis.send_kafka_event(operator=filter_operator,
                                                   key=key,
-                                                  function='filter_non_positive',
-                                                  params=(value, )))
+                                                  function='filter_cyclic_start',
+                                                  params=(value, key, )))
     responses = await asyncio.gather(*tasks)
     for request_id, timestamp in responses:
         timestamped_request_ids[request_id] = timestamp

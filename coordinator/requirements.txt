@@ -9,3 +9,6 @@ aiozmq==0.9.0
 # psutil==5.9.1
 # kafka
 kafka-python==2.0.2
+# snapshots
+minio==7.1.12
+miniopy-async==1.9

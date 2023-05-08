@@ -15,7 +15,7 @@ def msgpack_serialization(serializable_object: object) -> bytes:
 
 
 def msgpack_deserialization(serialized_object: bytes) -> dict:
-    return msgpack.unpackb(serialized_object)
+    return msgpack.unpackb(serialized_object, strict_map_key=False)
 
 
 def compressed_msgpack_serialization(serializable_object: object) -> bytes:
@@ -23,7 +23,7 @@ def compressed_msgpack_serialization(serializable_object: object) -> bytes:
 
 
 def compressed_msgpack_deserialization(serialized_object: bytes) -> dict:
-    return msgpack.unpackb(lz4.frame.decompress(serialized_object))
+    return msgpack.unpackb(lz4.frame.decompress(serialized_object), strict_map_key=False)
 
 
 def cloudpickle_serialization(serializable_object: object) -> bytes:
