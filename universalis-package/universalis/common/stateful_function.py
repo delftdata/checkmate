@@ -70,6 +70,10 @@ class StatefulFunction(Function):
 
     async def run(self, *args):
         raise NotImplementedError
+    
+    @property
+    def lock(self):
+        return self.__state.get_lock(self.key, self.__operator_name)
 
     async def get(self):
         value = await self.__state.get(self.key, self.__operator_name)
