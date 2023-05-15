@@ -293,7 +293,7 @@ class Worker:
         if message_type == 'RUN_FUN':
             run_func_payload: RunFuncPayload = self.unpack_run_payload(message, msg.key, timestamp=msg.timestamp)
             logging.info(f'RUNNING FUNCTION FROM KAFKA: {run_func_payload.function_name} {run_func_payload.key}')
-            if not self.notified_coordinator:
+            if not self.notified_coordinator and self.checkpoint_protocol == 'COR':
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
             self.create_task(
