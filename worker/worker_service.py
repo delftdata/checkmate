@@ -42,6 +42,7 @@ class Worker:
 
     def __init__(self):
         self.checkpoint_protocol = None
+        self.checkpoint_interval = 5
         self.checkpointing = None
         self.id: int = -1
         self.networking = NetworkingManager()
@@ -386,7 +387,8 @@ class Worker:
                         )
                     )
             case 'CHECKPOINT_PROTOCOL':
-                self.checkpoint_protocol = message
+                self.checkpoint_protocol = message[0]
+                self.checkpoint_interval = message[1]
                 self.networking.set_checkpoint_protocol(message)
             case 'TAKE_COORDINATED_CHECKPOINT':
                 if self.checkpoint_protocol == 'COR':
@@ -496,12 +498,12 @@ class Worker:
                 await self.checkpointing.init_cic(self.total_partitions_per_operator.keys(), self.peers.keys())
                 del self.peers[self.id]
                 # START CHECKPOINTING DEPENDING ON PROTOCOL
-                self.create_task(self.communication_induced_checkpointing(5))
+                self.create_task(self.communication_induced_checkpointing(self.checkpoint_interval))
                 # CHANGE TO CIC OBJECT
                 await self.checkpointing.set_peers(self.peers)
             case 'UNC':
                 del self.peers[self.id]
-                self.create_task(self.uncoordinated_checkpointing(5))
+                self.create_task(self.uncoordinated_checkpointing(self.checkpoint_interval))
             case 'COR':
                 await self.checkpointing.set_peers(self.peers)
             case _:
@@ -591,7 +593,7 @@ class Worker:
         logging.info(f"Worker id: {self.id}")
 
     async def main(self):
-        # self.create_task(self.simple_failure())
+        self.create_task(self.simple_failure())
         await self.register_to_coordinator()
         await self.start_tcp_service()
 
