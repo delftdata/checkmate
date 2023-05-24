@@ -528,8 +528,6 @@ class Worker:
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
             await asyncio.sleep(checkpoint_interval)
-            if isinstance(self.local_state, InMemoryOperatorState):
-                logging.warning(f'current state: {self.local_state.data}')
             for operator in self.total_partitions_per_operator.keys():
                 await self.take_snapshot(operator)
 
@@ -544,8 +542,6 @@ class Worker:
             current_time = time.time_ns() // 1000000
             last_snapshot_timestamp = await self.checkpointing.get_last_snapshot_timestamp(operator)
             if current_time > last_snapshot_timestamp + (checkpoint_interval*1000):
-                if isinstance(self.local_state, InMemoryOperatorState) and operator in self.local_state.data.keys():
-                    logging.warning(f'current state for {operator}: {self.local_state.data[operator]}')
                 await self.checkpointing.update_cic_checkpoint(operator)
                 cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
                 await self.take_snapshot(operator, cic_clock=cic_clock)
