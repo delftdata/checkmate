@@ -39,7 +39,6 @@ class CoordinatedCheckpointing:
         return set()
     
     async def process_channel_list(self, channel_list):
-        logging.warning(f'Channel list looks like: {channel_list}')
         for (fromOp, toOp, broadcast) in channel_list:
             if fromOp is None:
                 self.source_operators.add(toOp)
@@ -51,11 +50,9 @@ class CoordinatedCheckpointing:
                 if toOp not in self.incoming_channels.keys():
                     self.incoming_channels[toOp] = {}
                 if broadcast:
-                    logging.warning(f'Should be adding {fromOp} to {toOp}, peer look like: {self.peers}')
                     for id in self.peers.keys():
                         self.outgoing_channels[fromOp].add((id, toOp))
                         self.incoming_channels[toOp][(id, fromOp)] = False
-        logging.warning(f'outgoing channels: {self.outgoing_channels}, incoming channels: {self.incoming_channels}')
                 # Need some logic here that maps to either all other workers, or corresponding one based on boolean.
 
     async def marker_received(self, message):

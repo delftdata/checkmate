@@ -325,7 +325,6 @@ class Worker:
         for source in sources:
             #Checkpoint the source operator
             outgoing_channels = await self.checkpointing.get_outgoing_channels(source)
-            logging.warning(f'outgoing channels: {outgoing_channels}')
             #Send marker on all outgoing channels
             await self.take_snapshot(source, cor_round=round)
             for (id, operator) in outgoing_channels:
@@ -394,11 +393,10 @@ class Worker:
             case 'SEND_CHANNEL_LIST':
                 self.channel_list = message
             case 'TAKE_COORDINATED_CHECKPOINT':
-                logging.warning('Checkpointing should start')
                 if self.checkpoint_protocol == 'COR':
                     sources = await self.checkpointing.get_source_operators()
                     if len(sources) == 0:
-                        logging.warning('No source operators yet, nothing to checkpoint.')
+                        logging.warning('No source operators, nothing to checkpoint. Check if operator tree is supplied in generator.')
                     else:
                         await self.checkpoint_coordinated_sources(sources, message)
             case 'COORDINATED_MARKER':
