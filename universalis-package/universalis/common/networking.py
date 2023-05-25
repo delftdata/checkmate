@@ -155,8 +155,6 @@ class NetworkingManager:
                                                       partition=sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)
             msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
             self.last_messages_sent[sending_name][sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
-            if self.checkpoint_protocol == 'COR':
-                await self.checkpointing.set_outgoing_channels(sending_name, host, port, receiving_name)
         msg = self.encode_message(msg, serializer)
         socket_conn.zmq_socket.write((msg, ))
 

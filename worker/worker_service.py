@@ -44,6 +44,9 @@ class Worker:
         self.checkpoint_protocol = None
         self.checkpoint_interval = 5
         self.checkpointing = None
+
+        self.channel_list = None
+
         self.id: int = -1
         self.networking = NetworkingManager()
         self.router = None
@@ -118,8 +121,6 @@ class Worker:
                 # Necessary for uncoordinated checkpointing
                 incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
                 await self.checkpointing.set_last_messages_processed(payload.operator_name, incoming_channel, send_from['kafka_offset'])
-            elif self.checkpoint_protocol == 'COR':
-                await self.checkpointing.set_incoming_channels(payload.operator_name, send_from['sender_id'], send_from['operator_name'])
         return success
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
@@ -324,7 +325,7 @@ class Worker:
         for source in sources:
             #Checkpoint the source operator
             outgoing_channels = await self.checkpointing.get_outgoing_channels(source)
-            #logging.warning(f'outgoing channels: {outgoing_channels}')
+            logging.warning(f'outgoing channels: {outgoing_channels}')
             #Send marker on all outgoing channels
             await self.take_snapshot(source, cor_round=round)
             for (id, operator) in outgoing_channels:
@@ -389,8 +390,11 @@ class Worker:
             case 'CHECKPOINT_PROTOCOL':
                 self.checkpoint_protocol = message[0]
                 self.checkpoint_interval = message[1]
-                self.networking.set_checkpoint_protocol(message)
+                self.networking.set_checkpoint_protocol(message[0])
+            case 'SEND_CHANNEL_LIST':
+                self.channel_list = message
             case 'TAKE_COORDINATED_CHECKPOINT':
+                logging.warning('Checkpointing should start')
                 if self.checkpoint_protocol == 'COR':
                     sources = await self.checkpointing.get_source_operators()
                     if len(sources) == 0:
@@ -506,6 +510,7 @@ class Worker:
                 self.create_task(self.uncoordinated_checkpointing(self.checkpoint_interval))
             case 'COR':
                 await self.checkpointing.set_peers(self.peers)
+                await self.checkpointing.process_channel_list(self.channel_list)
             case _:
                 logging.info('no checkpointing started.')
         await self.networking.set_total_partitions_per_operator(self.total_partitions_per_operator)

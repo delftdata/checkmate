@@ -23,7 +23,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'CIC'
+CHECKPOINT_PROTOCOL: str = 'COR'
 
 CHECKPOINT_INTERVAL: int = 5
 
@@ -56,6 +56,7 @@ class CoordinatorService:
         #Coordinated approach
         self.checkpoint_round = -1
         self.started_processing = {}
+        self.channel_list = None
         #Send out checkpointing, only when all workers are done, increase round and wait for next checkpointing.
         self.done_checkpointing = {}
         self.last_confirmed_checkpoint_round = -1
@@ -350,6 +351,16 @@ class CoordinatorService:
                                 self.messages_sent_intervals[id][op] = {}
                                 self.messages_to_replay[id][op] = {}
                         logging.info(f"Submitted Stateflow Graph to Workers")
+                    case 'SEND_CHANNEL_LIST':
+                        for worker_id in self.worker_ips.keys():
+                            await self.networking.send_message(
+                                self.worker_ips[worker_id], WORKER_PORT,
+                                {
+                                    "__COM_TYPE__": 'SEND_CHANNEL_LIST',
+                                    "__MSG__": message
+                                },
+                                Serializer.MSGPACK
+                            )
                     case 'REGISTER_WORKER':
                         # A worker registered to the coordinator
                         assigned_id = self.coordinator.register_worker(message)

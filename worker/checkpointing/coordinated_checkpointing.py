@@ -38,22 +38,25 @@ class CoordinatedCheckpointing:
             return self.outgoing_channels[operator]
         return set()
     
-    async def set_outgoing_channels(self, own_operator, host, port, outgoing_operator):
-        if own_operator in self.sink_operators.keys():
-            self.sink_operators.pop(own_operator)
-        id = await self.get_worker_id(host, port)
-        if own_operator not in self.outgoing_channels.keys():
-            self.outgoing_channels[own_operator] = set()
-        self.outgoing_channels[own_operator].add((id, outgoing_operator))
-        return self.outgoing_channels
-
-    async def set_incoming_channels(self, own_operator, sender_id, sender_operator):
-        if own_operator not in self.outgoing_channels.keys():
-            self.sink_operators[own_operator] = False
-        if own_operator not in self.incoming_channels.keys():
-            self.incoming_channels[own_operator] = {}
-        if (sender_id, sender_operator) not in self.incoming_channels[own_operator].keys():
-            self.incoming_channels[own_operator][(sender_id, sender_operator)] = False
+    async def process_channel_list(self, channel_list):
+        logging.warning(f'Channel list looks like: {channel_list}')
+        for (fromOp, toOp, broadcast) in channel_list:
+            if fromOp is None:
+                self.source_operators.add(toOp)
+            elif toOp is None:
+                self.sink_operators[fromOp] = False
+            else:
+                if fromOp not in self.outgoing_channels.keys():
+                    self.outgoing_channels[fromOp] = set()
+                if toOp not in self.incoming_channels.keys():
+                    self.incoming_channels[toOp] = {}
+                if broadcast:
+                    logging.warning(f'Should be adding {fromOp} to {toOp}, peer look like: {self.peers}')
+                    for id in self.peers.keys():
+                        self.outgoing_channels[fromOp].add((id, toOp))
+                        self.incoming_channels[toOp][(id, fromOp)] = False
+        logging.warning(f'outgoing channels: {self.outgoing_channels}, incoming channels: {self.incoming_channels}')
+                # Need some logic here that maps to either all other workers, or corresponding one based on boolean.
 
     async def marker_received(self, message):
         sender_id, sender_operator, own_operator, _ = message
