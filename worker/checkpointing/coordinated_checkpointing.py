@@ -44,8 +44,6 @@ class CoordinatedCheckpointing:
             if op.name not in partitions_per_operator.keys():
                 partitions_per_operator[op.name] = set()
             partitions_per_operator[op.name].add(part)
-        logging.warning(f'worker_operators: {worker_operators}')
-        logging.warning(f'partitions_to_ids: {partitions_to_ids}')
         for (fromOp, toOp, broadcast) in channel_list:
             if fromOp is None:
                 self.source_operators.add(toOp)
