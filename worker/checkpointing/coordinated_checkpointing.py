@@ -38,7 +38,14 @@ class CoordinatedCheckpointing:
             return self.outgoing_channels[operator]
         return set()
     
-    async def process_channel_list(self, channel_list):
+    async def process_channel_list(self, channel_list, worker_operators, partitions_to_ids):
+        partitions_per_operator = {}
+        for (op, part) in worker_operators:
+            if op.name not in partitions_per_operator.keys():
+                partitions_per_operator[op.name] = set()
+            partitions_per_operator[op.name].add(part)
+        logging.warning(f'worker_operators: {worker_operators}')
+        logging.warning(f'partitions_to_ids: {partitions_to_ids}')
         for (fromOp, toOp, broadcast) in channel_list:
             if fromOp is None:
                 self.source_operators.add(toOp)
@@ -53,7 +60,19 @@ class CoordinatedCheckpointing:
                     for id in self.peers.keys():
                         self.outgoing_channels[fromOp].add((id, toOp))
                         self.incoming_channels[toOp][(id, fromOp)] = False
-                # Need some logic here that maps to either all other workers, or corresponding one based on boolean.
+                else:
+                    channel_ids = set()
+                    # First set all correct outgoing channels:
+                    for part in partitions_per_operator[fromOp]:
+                        channel_ids.add(partitions_to_ids[toOp][part])
+                    for id in channel_ids:
+                        self.outgoing_channels[fromOp].add((id, toOp))
+                    channel_ids = set()
+                    # Then set all correct incoming channels
+                    for part in partitions_per_operator[toOp]:
+                        channel_ids.add(partitions_to_ids[fromOp][part])
+                    for id in channel_ids:
+                        self.incoming_channels[toOp][(id, fromOp)] = False
 
     async def marker_received(self, message):
         sender_id, sender_operator, own_operator, _ = message

@@ -473,7 +473,7 @@ class Worker:
             operator.attach_state_networking(self.local_state, self.networking, self.dns)
 
     async def handle_execution_plan(self, message):
-        worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator = message
+        worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator, partitions_to_ids = message
         self.networking.set_id(self.id)
         self.waiting_for_exe_graph = False
         match self.checkpoint_protocol:
@@ -508,7 +508,7 @@ class Worker:
                 self.create_task(self.uncoordinated_checkpointing(self.checkpoint_interval))
             case 'COR':
                 await self.checkpointing.set_peers(self.peers)
-                await self.checkpointing.process_channel_list(self.channel_list)
+                await self.checkpointing.process_channel_list(self.channel_list, worker_operators, partitions_to_ids)
             case _:
                 logging.info('no checkpointing started.')
         await self.networking.set_total_partitions_per_operator(self.total_partitions_per_operator)
