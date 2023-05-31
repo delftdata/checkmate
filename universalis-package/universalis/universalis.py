@@ -113,7 +113,7 @@ class Universalis:
                  '__FUN_NAME__': fun_name,
                  '__PARAMS__': params,
                  '__PARTITION__': partition}
-        request_id = uuid.uuid1().int >> 64
+        request_id = uuid.uuid4().int >> 64
         msg = await self.kafka_producer.send_and_wait(operator.name,
                                                       key=request_id,
                                                       value=event,

@@ -1,0 +1,10 @@
+FROM ubuntu
+
+RUN apt update
+RUN apt install -y maven git htop iputils-ping wget net-tools
+
+COPY . ./experiments
+
+RUN cd experiments && mvn clean install -q
+
+WORKDIR /experiments
