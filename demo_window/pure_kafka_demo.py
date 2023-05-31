@@ -73,27 +73,7 @@ async def main():
             time.sleep(1 - lps)
         sec_end2 = timer()
         print(f'Latency per second: {sec_end2 - sec_start}')
-    
-    # OLD WORKING CODE
-    # for index in range(N_VALUES):
-    #     if index % 20000 == 0:
-    #         responses = await asyncio.gather(*tasks)
-    #         for request_id, timestamp in responses:
-    #             timestamped_request_ids[request_id] = timestamp
-    #         # print(timestamped_request_ids)
-    #         tasks = []
-    #         time.sleep(1)
-    #     # value = random.uniform(0, 10.0)
-    #     value = 1.0
-    #     key = random.randint(0, 5)
-    #     tasks.append(universalis.send_kafka_event(operator=tumbling_window_operator,
-    #                                               key=key,
-    #                                               function='window',
-    #                                               params=(value, )))
-    # responses = await asyncio.gather(*tasks)
-    # for request_id, timestamp in responses:
-    #     timestamped_request_ids[request_id] = timestamp
-    # print(timestamped_request_ids)
+        
 
     await universalis.close()
 
