@@ -110,7 +110,8 @@ class Worker:
             self.create_task(self.kafka_egress_producer.send_and_wait(
                 EGRESS_TOPIC_NAME,
                 key=payload.request_id,
-                value=msgpack_serialization(kafka_response)
+                value=msgpack_serialization(kafka_response),
+                partition=self.id-1
             ))
         if send_from is not None:
             if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
@@ -192,8 +193,9 @@ class Worker:
     async def start_kafka_egress_producer(self):
         self.kafka_egress_producer = AIOKafkaProducer(
             bootstrap_servers=[KAFKA_URL],
+            client_id=str(self.id),
             enable_idempotence=True,
-            compression_type="gzip"
+            compression_type="gzip",
         )
         while True:
             try:
