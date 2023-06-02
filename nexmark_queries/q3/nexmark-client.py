@@ -10,7 +10,7 @@ from universalis.common.stateflow_ingress import IngressTypes
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
-from operators import q1_graph
+from nexmark_queries.q1.operators import q1_graph
 
 UNIVERSALIS_HOST: str = 'localhost'
 UNIVERSALIS_PORT: int = 8886
@@ -34,12 +34,14 @@ async def main():
     input("Press when you want to end")
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
+               "--query", "3",
                "--generator-parallelism", "1",
-               "--enable-bids-topic", "true",
+               "--enable-auctions-topic", "true",
+               "--enable-persons-topic", "true",
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",
-               "--rate", "100",
+               "--rate", "1000",
                "--max-noise", "0",
                "--iteration-duration-ms", "60000",
                "--kafka-server", "localhost:9093"
