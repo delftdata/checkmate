@@ -44,7 +44,7 @@ async def main():
                "--enable-bids-topic", "true",
                "--load-pattern", "static",
                "--experiment-length", "1",
-               "--use-default-configuration" "false",
+               "--use-default-configuration", "false",
                "--rate", "1000",
                "--max-noise", "0",
                "--iteration-duration-ms", "60000",

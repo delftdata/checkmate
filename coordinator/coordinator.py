@@ -68,8 +68,7 @@ class Coordinator:
                     topic_partitions = partitions_per_operator[key_one] * partitions_per_operator[key_two]
                     topics.append(NewTopic(name= topic_name, num_partitions=topic_partitions, replication_factor=1))
             
-        max_egress_partitions = max(partitions_per_operator.values())
-        topics.append(NewTopic(name='universalis-egress', num_partitions=max_egress_partitions, replication_factor=1))
+        topics.append(NewTopic(name='universalis-egress', num_partitions=len(workers), replication_factor=1))
         try:
             client.create_topics(topics)
         except TopicAlreadyExistsError:
