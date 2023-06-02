@@ -142,7 +142,7 @@ class Worker:
                     case _:
                         logging.warning('Unknown protocol, no snapshot data added.')
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
-                logging.warning(f'Local state data for {operator}: {self.local_state.data[operator]}')
+                # logging.warning(f'Local state data for {operator}: {self.local_state.data[operator]}')
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
             snapshot_time = cor_round
             if snapshot_time == -1:
@@ -415,7 +415,7 @@ class Worker:
                             Serializer.MSGPACK
                         )
             case 'RECOVER_FROM_SNAPSHOT':
-                logging.warning(f'Recovery message received: {message}')
+                logging.warning(f'Recovery message received.')
                 match self.checkpoint_protocol:
                     case 'CIC' | 'UNC':
                         for op_name in message.keys():

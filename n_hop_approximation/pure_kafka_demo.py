@@ -39,16 +39,14 @@ async def main():
 
     time.sleep(1)
 
+    responses = []
     tasks = []
     # SEND REQUESTS
     time.sleep(10)
 
-    for _ in range(2):
+    for _ in range(4):
         sec_start = timer()
         for i in range(messages_per_second):
-            if i % (messages_per_second // sleeps_per_second) == 0:
-                tasks=[]
-                time.sleep(sleep_time)
             key = random.randint(0, 5)
             first_node = random.choice(string.ascii_letters)
             second_node = first_node
@@ -59,18 +57,24 @@ async def main():
             tasks.append(universalis.send_kafka_event(operator=first_map_operator,
                                                   key=key,
                                                   function='find_neighbors',
-                                                  params=(edge, key, )))
-        responses = await asyncio.gather(*tasks)
-        tasks=[]
+                                                  params=(edge, key, ))) 
+            if i % (messages_per_second // sleeps_per_second) == 0:
+                responses = responses + await asyncio.gather(*tasks)
+                tasks = []
+                time.sleep(sleep_time)
+        responses = responses + await asyncio.gather(*tasks)
+        tasks = []
         sec_end = timer()
         lps = sec_end - sec_start
         if lps < 1:
             time.sleep(1 - lps)
         sec_end2 = timer()
         print(f'Latency per second: {sec_end2 - sec_start}')
-        
 
     await universalis.close()
+
+    for request_id, timestamp in responses:
+        timestamped_request_ids[request_id] = timestamp
 
     pd.DataFrame(timestamped_request_ids.items(), columns=['request_id', 'timestamp']).to_csv('client_requests.csv',
                                                                                               index=False)
