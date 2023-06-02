@@ -10,8 +10,8 @@ async def filter(ctx: StatefulFunction, person: Person):
     if person.state in ["OR", "ID", "CA"]:
         await ctx.call_remote_function_no_response(
             operator_name='join',
-            function_name='statefull_join',
+            function_name='stateful_join',
             key=ctx.key,
-            params=((Person, 'l', )),
+            params=(person,),
             serializer=Serializer.CLOUDPICKLE
         )

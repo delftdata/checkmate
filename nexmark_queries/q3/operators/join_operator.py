@@ -1,7 +1,7 @@
 import random
 
 from universalis.common.operator import StatefulFunction, Operator
-from universalis.nexmark.entities import Auction, Person
+from universalis.nexmark.entities import Auction, Entity, Person
 
 join_operator = Operator('join', n_partitions=6)
 
@@ -27,45 +27,37 @@ async def stateless_join(ctx: StatefulFunction, items: list):
     return joined_result
 
 @join_operator.register
-async def stateful_join(ctx: StatefulFunction, item: tuple):
-    state = None
+async def stateful_join(ctx: StatefulFunction, item: Entity):
     async with ctx.lock:
         state = await ctx.get()
         # Init the state if it's empty:
-        if 'left_hash' not in state.keys():
-            state['left_hash'] = []
-        if 'right_hash' not in state.keys():
-            state['right_hash'] = []
+        if state is None:
+             state = {'auctions': [], 'persons': []}
 
-        if item[1] == 'l':
-            state['left_hash'].append(item[0].to_tuple())
-        elif item[1] == 'r':
-            state['right_hash'].append(item[0].to_tuple())
+        if isinstance(item, Auction):
+            state['auctions'].append(item.to_tuple())
+        elif isinstance(item, Person):
+            state['persons'].append(item.to_tuple())
 
-        ctx.put(state)
+        await ctx.put(state)
 
-    joined_result = []
-
-    if item[1] == 'l':
-        for right_item in state['right_hash'][:-1]:
-                joined_row = (item[0].to_tuple(), )
-                joined_row.append(right_item)
-                joined_result.append(joined_row)
+    if isinstance(item, Auction):
+        for person in state['persons'][:-1]:
+                joined_row = (item.to_tuple(), person,)
                 await ctx.call_remote_function_no_response(
                     operator_name='sink',
                     function_name='output',
                     key=ctx.key,
-                    params=(joined_result)
+                    params=(joined_row,)
                 )
 
-    elif item[1] == 'r':
-        for left_item in state['left_hash'][:-1]:
-                joined_row = (item[0].to_tuple(), )
-                joined_row.append(left_item)
+    elif isinstance(item, Person):
+        for auction in state['auctions'][:-1]:
+                joined_row = (item.to_tuple(), auction, )
                 await ctx.call_remote_function_no_response(
                     operator_name='sink',
                     function_name='output',
                     key=ctx.key,
-                    params=(joined_result)
+                    params=(joined_row,)
                 )
 

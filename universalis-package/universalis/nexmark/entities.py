@@ -1,9 +1,13 @@
 class Entity:
-    def __init__():
+    # def __init__(self, name, type):
+    #     self.name=name
+    #     self.type=type
+
+    def __init__(self):
         pass
     
     def to_tuple(self):
-        return (*self.__dict__.items(), )
+        return (*self.__dict__.values(), )
 
 class Auction(Entity):
     def __init__(self, id, itemName, description, initialBid, reserve, dateTime, expires, seller, category, extra):

@@ -10,7 +10,7 @@ from universalis.common.stateflow_ingress import IngressTypes
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
-from nexmark_queries.q1.operators import q1_graph
+from operators import q3_graph
 
 UNIVERSALIS_HOST: str = 'localhost'
 UNIVERSALIS_PORT: int = 8886
@@ -25,7 +25,7 @@ async def main():
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
-    await universalis.submit(q1_graph.g)
+    await universalis.submit(q3_graph.g)
 
     print('Graph submitted')
 
