@@ -126,6 +126,7 @@ class Worker:
     # if you want to use this run it with self.create_task(self.take_snapshot())
     async def take_snapshot(self, operator, cic_clock=0, cor_round=-1):
         if isinstance(self.local_state, InMemoryOperatorState):
+            snapshot_start = time.time_ns() // 1000000
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
@@ -159,6 +160,7 @@ class Worker:
                 coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
                 coordinator_info['last_messages_sent'] = last_messages_sent
                 coordinator_info['snapshot_name'] = snapshot_name
+                coordinator_info['snapshot_duration'] = (time.time_ns() // 1000000) - snapshot_start
                 await self.networking.send_message(
                     DISCOVERY_HOST, DISCOVERY_PORT,
                     {
@@ -189,6 +191,14 @@ class Worker:
         for (tp, offset) in to_replay:
             self.kafka_consumer.seek(tp, offset)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
+        await self.networking.send_message(
+            DISCOVERY_HOST, DISCOVERY_PORT,
+            {
+                "__COM_TYPE__": 'RECOVERY_DONE',
+                "__MSG__": self.id
+            },
+            Serializer.MSGPACK
+        )
 
 
     async def start_kafka_egress_producer(self):
