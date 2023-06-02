@@ -23,6 +23,19 @@ async def main():
                               ingress_type=IngressTypes.KAFKA,
                               kafka_url=KAFKA_URL)
     await universalis.start()
+
+    # List of channels; (fromOperator, toOperator, boolean)
+    # Use None as fromOperator for source operators
+    # Use None as toOperator for sink operators
+    # The boolean does not matter in these two cases
+    channel_list = [
+        (None, 'filter', False),
+        ('filter', 'map', True),
+        ('map', None, False)
+    ]
+
+    await universalis.send_channel_list(channel_list)
+
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
