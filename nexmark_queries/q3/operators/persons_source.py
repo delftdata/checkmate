@@ -11,7 +11,7 @@ async def read(ctx: StatefulFunction, *args):
     await ctx.call_remote_function_no_response(
         operator_name='personsFilter',
         function_name='filter',
-        key=ctx.key,
+        key=person.id,
         params=(person,),
         serializer=Serializer.CLOUDPICKLE
     )
