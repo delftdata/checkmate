@@ -12,3 +12,4 @@ redis==4.5.5
 aiokafka==0.8.1
 # snapshots
 minio==7.1.14
+miniopy-async==1.9

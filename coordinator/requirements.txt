@@ -10,3 +10,4 @@ aiozmq==1.0.0
 kafka-python==2.0.2
 # snapshots
 minio==7.1.14
+miniopy-async==1.9
