@@ -179,7 +179,7 @@ class Worker:
                     Serializer.MSGPACK
                 )
             timestamp_five = time.time_ns() // 1000000
-            logging.warning(f'timestamp times; flushing buffer: {timestamp_two - timestamp_one}, compressing data: {timestamp_three - timestamp_two}, writing to bucket: {timestamp_four - timestamp_three}, snapshot data: {timestamp_five - timestamp_four}')
+            logging.warning(f'timestamp times for operator {operator}; flushing buffer: {timestamp_two - timestamp_one}, compressing data: {timestamp_three - timestamp_two}, writing to bucket: {timestamp_four - timestamp_three}, snapshot data: {timestamp_five - timestamp_four}')
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
