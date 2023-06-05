@@ -160,7 +160,9 @@ class Worker:
                 coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
                 coordinator_info['last_messages_sent'] = last_messages_sent
                 coordinator_info['snapshot_name'] = snapshot_name
-                coordinator_info['snapshot_duration'] = (time.time_ns() // 1000000) - snapshot_start
+                snapshot_duration = (time.time_ns() // 1000000) - snapshot_start
+                coordinator_info['snapshot_duration'] = snapshot_duration
+                logging.warning(f'Snapshot done, took: {snapshot_duration}')
                 await self.networking.send_message(
                     DISCOVERY_HOST, DISCOVERY_PORT,
                     {
