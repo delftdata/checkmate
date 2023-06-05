@@ -13,10 +13,10 @@ from universalis.common.logging import logging
 from operators import nhop_graph
 from operators.nhop_graph import first_map_operator
 
-N_VALUES = 40000
-messages_per_second=10000
-sleeps_per_second = 100
-sleep_time = 0.00085
+N_VALUES = 80000
+messages_per_second=4000
+sleeps_per_second = 10
+sleep_time = 0.0045
 
 UNIVERSALIS_HOST: str = 'localhost'
 UNIVERSALIS_PORT: int = 8886
@@ -44,7 +44,7 @@ async def main():
     # SEND REQUESTS
     time.sleep(10)
 
-    for _ in range(4):
+    for _ in range(20):
         sec_start = timer()
         for i in range(messages_per_second):
             key = random.randint(0, 5)
@@ -53,7 +53,6 @@ async def main():
             while second_node == first_node:
                 second_node = random.choice(string.ascii_letters)
             edge = (first_node, second_node, 1)
-            print(edge)
             tasks.append(universalis.send_kafka_event(operator=first_map_operator,
                                                   key=key,
                                                   function='find_neighbors',

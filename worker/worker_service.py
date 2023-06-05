@@ -482,6 +482,20 @@ class Worker:
         for operator in self.registered_operators.values():
             operator.attach_state_networking(self.local_state, self.networking, self.dns)
 
+    async def send_throughputs(self):
+        while(True):
+            await asyncio.sleep(1)
+            timestamp = time.time_ns() // 1000000
+            offsets = await self.checkpointing.get_offsets()
+            await self.networking.send_message(
+                DISCOVERY_HOST, DISCOVERY_PORT,
+                {
+                    "__COM_TYPE__": 'THROUGHPUT_INFO',
+                    "__MSG__": (self.id, timestamp, offsets)
+                },
+                Serializer.MSGPACK
+            )
+
     async def handle_execution_plan(self, message):
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator, partitions_to_ids = message
         self.networking.set_id(self.id)
@@ -503,6 +517,9 @@ class Worker:
             case _:
                 logging.warning('Not supported value is set for CHECKPOINTING_PROTOCOL, continue without checkpoints.')
         self.networking.set_checkpointing(self.checkpointing)
+
+        self.create_task(self.send_throughputs())
+        self.create_task(self.simple_failure())
 
         match self.checkpoint_protocol:
             case 'CIC':
@@ -602,7 +619,6 @@ class Worker:
         logging.info(f"Worker id: {self.id}")
 
     async def main(self):
-        self.create_task(self.simple_failure())
         await self.register_to_coordinator()
         await self.start_tcp_service()
 
