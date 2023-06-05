@@ -2,6 +2,7 @@ import asyncio
 import io
 import os
 import time
+import random
 from timeit import default_timer as timer
 from math import ceil
 
@@ -559,7 +560,8 @@ class Worker:
 
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
-            await asyncio.sleep(checkpoint_interval)
+            interval_randomness = random.randint(checkpoint_interval - 1, checkpoint_interval + 1)
+            await asyncio.sleep(interval_randomness)
             for operator in self.total_partitions_per_operator.keys():
                 await self.take_snapshot(operator)
 
@@ -571,15 +573,16 @@ class Worker:
 
     async def cic_per_operator(self, checkpoint_interval, operator):
         while True:
+            interval_randomness = random.randint(checkpoint_interval-1, checkpoint_interval+1)
             current_time = time.time_ns() // 1000000
             last_snapshot_timestamp = await self.checkpointing.get_last_snapshot_timestamp(operator)
-            if current_time > last_snapshot_timestamp + (checkpoint_interval*1000):
+            if current_time > last_snapshot_timestamp + (interval_randomness*1000):
                 await self.checkpointing.update_cic_checkpoint(operator)
                 cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
                 await self.take_snapshot(operator, cic_clock=cic_clock)
-                await asyncio.sleep(checkpoint_interval)
+                await asyncio.sleep(interval_randomness)
             else:
-                await asyncio.sleep(ceil(((last_snapshot_timestamp + (checkpoint_interval*1000)) - current_time) / 1000))
+                await asyncio.sleep(ceil(((last_snapshot_timestamp + (interval_randomness*1000)) - current_time) / 1000))
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
