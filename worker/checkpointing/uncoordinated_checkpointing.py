@@ -21,6 +21,9 @@ class UncoordinatedCheckpointing:
     async def set_last_messages_processed(self, operator, channel, offset):
         self.last_messages_processed[operator][channel] = offset
 
+    async def get_offsets(self):
+        return self.last_kafka_consumed
+
     def set_consumed_offset(self, topic, partition, offset):
         if topic not in self.last_kafka_consumed:
             self.last_kafka_consumed[topic] = {}

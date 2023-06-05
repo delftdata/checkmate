@@ -2,6 +2,7 @@ import asyncio
 import io
 import os
 import time
+import random
 from timeit import default_timer as timer
 from math import ceil
 
@@ -128,10 +129,13 @@ class Worker:
     # if you want to use this run it with self.create_task(self.take_snapshot())
     async def take_snapshot(self, operator, cic_clock=0, cor_round=-1):
         if isinstance(self.local_state, InMemoryOperatorState):
+            snapshot_start = time.time_ns() // 1000000
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
+                timestamp_one = time.time_ns() // 1000000
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
                 last_messages_sent = await self.networking.flush_kafka_buffer(operator)
+                timestamp_two = time.time_ns() // 1000000
                 snapshot_data = {}
                 match self.checkpoint_protocol:
                     case 'UNC':
@@ -144,8 +148,9 @@ class Worker:
                     case _:
                         logging.warning('Unknown protocol, no snapshot data added.')
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
-                logging.warning(f'Local state data for {operator}: {self.local_state.data[operator]}')
+                # logging.warning(f'Local state data for {operator}: {self.local_state.data[operator]}')
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
+                timestamp_three = time.time_ns() // 1000000
             snapshot_time = cor_round
             if snapshot_time == -1:
                 snapshot_time = time.time_ns() // 1000000
@@ -156,11 +161,15 @@ class Worker:
                 data=io.BytesIO(bytes_file),
                 length=len(bytes_file)
             )
+            timestamp_four = time.time_ns() // 1000000
             if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
                 coordinator_info = {}
                 coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
                 coordinator_info['last_messages_sent'] = last_messages_sent
                 coordinator_info['snapshot_name'] = snapshot_name
+                snapshot_duration = (time.time_ns() // 1000000) - snapshot_start
+                coordinator_info['snapshot_duration'] = snapshot_duration
+                #logging.warning(f'Snapshot done, took: {snapshot_duration}')
                 await self.networking.send_message(
                     DISCOVERY_HOST, DISCOVERY_PORT,
                     {
@@ -169,6 +178,8 @@ class Worker:
                     },
                     Serializer.MSGPACK
                 )
+            timestamp_five = time.time_ns() // 1000000
+            logging.warning(f'timestamp times; flushing buffer: {timestamp_two - timestamp_one}, compressing data: {timestamp_three - timestamp_two}, writing to bucket: {timestamp_four - timestamp_three}, snapshot data: {timestamp_five - timestamp_four}')
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
@@ -191,6 +202,14 @@ class Worker:
         for (tp, offset) in to_replay:
             self.kafka_consumer.seek(tp, offset)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
+        await self.networking.send_message(
+            DISCOVERY_HOST, DISCOVERY_PORT,
+            {
+                "__COM_TYPE__": 'RECOVERY_DONE',
+                "__MSG__": self.id
+            },
+            Serializer.MSGPACK
+        )
 
     async def start_kafka_consumer(self, topic_partitions: list[TopicPartition]):
         logging.info(f'Creating Kafka consumer for topic partitions: {topic_partitions}')
@@ -256,7 +275,7 @@ class Worker:
         await self.networking.replay_message(receiver_info['host'], receiver_info['port'], deserialized_data)
 
     async def simple_failure(self):
-        await asyncio.sleep(40)
+        await asyncio.sleep(20)
         if self.id == 1:
             await self.networking.send_message(
                 DISCOVERY_HOST, DISCOVERY_PORT,
@@ -401,7 +420,7 @@ class Worker:
                             Serializer.MSGPACK
                         )
             case 'RECOVER_FROM_SNAPSHOT':
-                logging.warning(f'Recovery message received: {message}')
+                logging.warning(f'Recovery message received.')
                 match self.checkpoint_protocol:
                     case 'CIC' | 'UNC':
                         for op_name in message.keys():
@@ -458,6 +477,20 @@ class Worker:
         for operator in self.registered_operators.values():
             operator.attach_state_networking(self.local_state, self.networking, self.dns)
 
+    async def send_throughputs(self):
+        while(True):
+            await asyncio.sleep(1)
+            timestamp = time.time_ns() // 1000000
+            offsets = await self.checkpointing.get_offsets()
+            await self.networking.send_message(
+                DISCOVERY_HOST, DISCOVERY_PORT,
+                {
+                    "__COM_TYPE__": 'THROUGHPUT_INFO',
+                    "__MSG__": (self.id, timestamp, offsets)
+                },
+                Serializer.MSGPACK
+            )
+
     async def handle_execution_plan(self, message):
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator, partitions_to_ids = message
         self.networking.set_id(self.id)
@@ -479,6 +512,9 @@ class Worker:
             case _:
                 logging.warning('Not supported value is set for CHECKPOINTING_PROTOCOL, continue without checkpoints.')
         self.networking.set_checkpointing(self.checkpointing)
+
+        self.create_task(self.send_throughputs())
+        self.create_task(self.simple_failure())
 
         match self.checkpoint_protocol:
             case 'CIC':
@@ -516,7 +552,8 @@ class Worker:
 
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
-            await asyncio.sleep(checkpoint_interval)
+            interval_randomness = random.randint(checkpoint_interval - 1, checkpoint_interval + 1)
+            await asyncio.sleep(interval_randomness)
             for operator in self.total_partitions_per_operator.keys():
                 await self.take_snapshot(operator)
 
@@ -528,15 +565,16 @@ class Worker:
 
     async def cic_per_operator(self, checkpoint_interval, operator):
         while True:
+            interval_randomness = random.randint(checkpoint_interval-1, checkpoint_interval+1)
             current_time = time.time_ns() // 1000000
             last_snapshot_timestamp = await self.checkpointing.get_last_snapshot_timestamp(operator)
-            if current_time > last_snapshot_timestamp + (checkpoint_interval*1000):
+            if current_time > last_snapshot_timestamp + (interval_randomness*1000):
                 await self.checkpointing.update_cic_checkpoint(operator)
                 cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
                 await self.take_snapshot(operator, cic_clock=cic_clock)
-                await asyncio.sleep(checkpoint_interval)
+                await asyncio.sleep(interval_randomness)
             else:
-                await asyncio.sleep(ceil(((last_snapshot_timestamp + (checkpoint_interval*1000)) - current_time) / 1000))
+                await asyncio.sleep(ceil(((last_snapshot_timestamp + (interval_randomness*1000)) - current_time) / 1000))
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
@@ -579,7 +617,6 @@ class Worker:
         logging.info(f"Worker id: {self.id}")
 
     async def main(self):
-        self.create_task(self.simple_failure())
         await self.register_to_coordinator()
         await self.start_tcp_service()
 
