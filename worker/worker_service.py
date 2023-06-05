@@ -130,8 +130,10 @@ class Worker:
             snapshot_start = time.time_ns() // 1000000
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
+                timestamp_one = time.time_ns() // 1000000
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
                 last_messages_sent = await self.networking.flush_kafka_buffer(operator)
+                timestamp_two = time.time_ns() // 1000000
                 snapshot_data = {}
                 match self.checkpoint_protocol:
                     case 'UNC':
@@ -146,6 +148,7 @@ class Worker:
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
                 # logging.warning(f'Local state data for {operator}: {self.local_state.data[operator]}')
                 bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
+                timestamp_three = time.time_ns() // 1000000
             snapshot_time = cor_round
             if snapshot_time == -1:
                 snapshot_time = time.time_ns() // 1000000
@@ -156,6 +159,7 @@ class Worker:
                 data=io.BytesIO(bytes_file),
                 length=len(bytes_file)
             )
+            timestamp_four = time.time_ns() // 1000000
             if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
                 coordinator_info = {}
                 coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
@@ -163,7 +167,7 @@ class Worker:
                 coordinator_info['snapshot_name'] = snapshot_name
                 snapshot_duration = (time.time_ns() // 1000000) - snapshot_start
                 coordinator_info['snapshot_duration'] = snapshot_duration
-                logging.warning(f'Snapshot done, took: {snapshot_duration}')
+                #logging.warning(f'Snapshot done, took: {snapshot_duration}')
                 await self.networking.send_message(
                     DISCOVERY_HOST, DISCOVERY_PORT,
                     {
@@ -172,6 +176,8 @@ class Worker:
                     },
                     Serializer.MSGPACK
                 )
+            timestamp_five = time.time_ns() // 1000000
+            logging.warning(f'timestamp times; flushing buffer: {timestamp_two - timestamp_one}, compressing data: {timestamp_three - timestamp_two}, writing to bucket: {timestamp_four - timestamp_three}, snapshot data: {timestamp_five - timestamp_four}')
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
