@@ -59,7 +59,7 @@ class StatefulFunction(Function):
             res = await self.run(*args)
             await self.__send_async_calls()
         except Exception as e:
-            logging.debug(traceback.format_exc())
+            logging.error(traceback.format_exc())
             return e
         else:
             return res
@@ -74,6 +74,10 @@ class StatefulFunction(Function):
     @property
     def lock(self):
         return self.__state.get_lock(self.key, self.__operator_name)
+    
+    @property
+    def operator_lock(self):
+        return self.__state.get_operator_lock(self.key, self.__operator_name)
 
     async def get(self):
         value = await self.__state.get(self.key, self.__operator_name)
