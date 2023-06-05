@@ -282,7 +282,7 @@ class Worker:
         await self.networking.replay_message(receiver_info['host'], receiver_info['port'], deserialized_data)
 
     async def simple_failure(self):
-        await asyncio.sleep(40)
+        await asyncio.sleep(20)
         if self.id == 1:
             await self.networking.send_message(
                 DISCOVERY_HOST, DISCOVERY_PORT,
