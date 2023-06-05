@@ -1,29 +1,31 @@
+import pickle
 from enum import Enum, auto
 
-import msgpack
+import msgspec
 import cloudpickle
-import lz4.frame
+import gzip
 
 
 class Serializer(Enum):
     CLOUDPICKLE = auto()
     MSGPACK = auto()
+    PICKLE = auto()
 
 
 def msgpack_serialization(serializable_object: object) -> bytes:
-    return msgpack.packb(serializable_object)
+    return msgspec.msgpack.encode(serializable_object)
 
 
 def msgpack_deserialization(serialized_object: bytes) -> dict:
-    return msgpack.unpackb(serialized_object, strict_map_key=False)
+    return msgspec.msgpack.decode(serialized_object)
 
 
 def compressed_msgpack_serialization(serializable_object: object) -> bytes:
-    return lz4.frame.compress(msgpack.packb(serializable_object))
+    return gzip.compress(msgpack_serialization(serializable_object))
 
 
 def compressed_msgpack_deserialization(serialized_object: bytes) -> dict:
-    return msgpack.unpackb(lz4.frame.decompress(serialized_object), strict_map_key=False)
+    return msgpack_deserialization(gzip.decompress(serialized_object))
 
 
 def cloudpickle_serialization(serializable_object: object) -> bytes:
@@ -35,8 +37,24 @@ def cloudpickle_deserialization(serialized_object: bytes) -> dict:
 
 
 def compressed_cloudpickle_serialization(serializable_object: object) -> bytes:
-    return lz4.frame.compress(cloudpickle.dumps(serializable_object))
+    return gzip.compress(cloudpickle.dumps(serializable_object))
 
 
 def compressed_cloudpickle_deserialization(serialized_object: bytes) -> dict:
-    return cloudpickle.loads(lz4.frame.decompress(serialized_object))
+    return cloudpickle.loads(gzip.decompress(serialized_object))
+
+
+def pickle_serialization(serializable_object: object) -> bytes:
+    return pickle.dumps(serializable_object)
+
+
+def pickle_deserialization(serialized_object: bytes) -> dict:
+    return pickle.loads(serialized_object)
+
+
+def compressed_pickle_serialization(serializable_object: object) -> bytes:
+    return gzip.compress(pickle.dumps(serializable_object))
+
+
+def compressed_pickle_deserialization(serialized_object: bytes) -> dict:
+    return pickle.loads(gzip.decompress(serialized_object))
