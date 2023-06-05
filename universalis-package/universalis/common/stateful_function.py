@@ -84,6 +84,12 @@ class StatefulFunction(Function):
         logging.info(f'PUT: {self.key}:{value} in operator: {self.__operator_name}')
         await self.__state.put(self.key, value, self.__operator_name)
 
+    @property
+    async def operator_state(self):
+        state = await self.__state.get_operator_state(self.__operator_name)
+        return state
+
+
     async def __send_async_calls(self):
         n_remote_calls: int = len(self.__async_remote_calls)
         if n_remote_calls > 0:

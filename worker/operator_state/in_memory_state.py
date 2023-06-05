@@ -17,6 +17,9 @@ class InMemoryOperatorState(BaseOperatorState):
             self.data[operator_name] = {}
             self.locks[operator_name] = {}
 
+    async def get_operator_state(self, operator_name: str):
+        return self.data[operator_name]
+
     def get_lock(self, key, operator_name: str) -> asyncio.Lock:
         if key not in self.locks[operator_name]:
             self.locks[operator_name][key] = asyncio.Lock()
