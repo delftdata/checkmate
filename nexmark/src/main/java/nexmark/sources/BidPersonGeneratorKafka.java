@@ -165,8 +165,8 @@ public class BidPersonGeneratorKafka {
 
         // Get topics to enable
         boolean bidsTopicEnabled = params.getBoolean("enable-bids-topic", false);
-        boolean personTopicEnabled = params.getBoolean("enable-person-topic", false);
-        boolean auctionTopicEnabled = params.getBoolean("enable-auction-topic", false);
+        boolean personTopicEnabled = params.getBoolean("enable-persons-topic", false);
+        boolean auctionTopicEnabled = params.getBoolean("enable-auctions-topic", false);
 
         if (!bidsTopicEnabled && !personTopicEnabled && !auctionTopicEnabled) {
             bidsTopicEnabled = true;

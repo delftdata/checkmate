@@ -10,13 +10,7 @@ from universalis.common.stateflow_ingress import IngressTypes
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
-from operators import nexmark_graph
-from operators.nexmark_graph import bids_source_operator
-
-N_VALUES = 40000
-messages_per_second=10000
-sleeps_per_second = 100
-sleep_time = 0.00085
+from operators import q1_graph
 
 UNIVERSALIS_HOST: str = 'localhost'
 UNIVERSALIS_PORT: int = 8886
@@ -31,7 +25,7 @@ async def main():
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
-    await universalis.submit(nexmark_graph.g)
+    await universalis.submit(q1_graph.g)
 
     print('Graph submitted')
 
@@ -45,7 +39,7 @@ async def main():
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",
-               "--rate", "1000",
+               "--rate", "100",
                "--max-noise", "0",
                "--iteration-duration-ms", "60000",
                "--kafka-server", "localhost:9093"

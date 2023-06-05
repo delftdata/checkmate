@@ -5,4 +5,4 @@ bids_source_operator = Operator('bids_source', n_partitions=6)
 
 @bids_source_operator.register
 async def read(ctx: StatefulFunction, *kwargs):
-    return kwargs
+    return kwargs[1]

@@ -31,9 +31,9 @@ import org.apache.beam.sdk.nexmark.model.Person;
  * functions.
  */
 public class BidPersonAuctionSourceFunction extends Thread {
-    String PERSON_TOPIC = "person_source";
+    String PERSON_TOPIC = "persons_source";
     String BID_TOPIC = "bids_source";
-    String AUCTION_TOPIC = "auction_source";
+    String AUCTION_TOPIC = "auctions_source";
 
     Producer<byte[], byte[]> producer;
     ObjectMapper objectMapper;
