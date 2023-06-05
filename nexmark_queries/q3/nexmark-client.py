@@ -31,7 +31,7 @@ async def main():
 
 
     time.sleep(1)
-    input("Press when you want to end")
+    input("Press when you want to start producing.")
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
                "--query", "3",
