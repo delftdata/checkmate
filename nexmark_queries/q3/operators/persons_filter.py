@@ -11,7 +11,7 @@ async def filter(ctx: StatefulFunction, person: Person):
         await ctx.call_remote_function_no_response(
             operator_name='join',
             function_name='stateful_join',
-            key=ctx.key,
+            key=person.id,
             params=(person,),
             serializer=Serializer.CLOUDPICKLE
         )
