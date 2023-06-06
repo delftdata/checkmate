@@ -5,7 +5,7 @@ from universalis.nexmark.entities import Bid
 currency_mapper_operator = Operator('currencyMapper', n_partitions=6)
 
 @currency_mapper_operator.register
-async def dollar_to_euro(ctx: StatefulFunction, bid: Bid):
+async def dollarToEuro(ctx: StatefulFunction, bid: Bid):
     exchange_rate = 0.82
     price_in_euro = exchange_rate * bid.price
     await ctx.call_remote_function_no_response(

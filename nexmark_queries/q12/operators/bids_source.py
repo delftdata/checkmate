@@ -1,17 +1,17 @@
 from universalis.common.operator import StatefulFunction, Operator
 from universalis.common.logging import logging
+from universalis.nexmark.entities import Bid
 from universalis.common.serialization import Serializer
-from universalis.nexmark.entities import Person
 
-persons_source_operator = Operator('personsSource', n_partitions=6)
+bids_source_operator = Operator('bidsSource', n_partitions=6)
 
-@persons_source_operator.register
+@bids_source_operator.register
 async def read(ctx: StatefulFunction, *args):
-    person = Person(*args)
+    bid = Bid(*args)
     await ctx.call_remote_function_no_response(
-        operator_name='personsFilter',
-        function_name='filter',
-        key=ctx.key,
-        params=(person,),
+        operator_name='tumblingWindow',
+        function_name='add',
+        key=bid.bidder,
+        params=(bid, ),
         serializer=Serializer.CLOUDPICKLE
     )

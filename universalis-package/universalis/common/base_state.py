@@ -17,6 +17,10 @@ class BaseOperatorState(ABC):
     @abstractmethod
     def get_lock(self, key, operator_name: str):
         raise NotImplementedError
+    
+    @abstractmethod
+    def get_operator_lock(self, key, operator_name: str):
+        raise NotImplementedError
 
     @abstractmethod
     async def put(self, key, value, operator_name: str):

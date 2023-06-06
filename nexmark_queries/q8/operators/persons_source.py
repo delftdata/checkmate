@@ -9,9 +9,9 @@ persons_source_operator = Operator('personsSource', n_partitions=6)
 async def read(ctx: StatefulFunction, *args):
     person = Person(*args)
     await ctx.call_remote_function_no_response(
-        operator_name='personsFilter',
-        function_name='filter',
-        key=ctx.key,
+        operator_name='tumblingWindow',
+        function_name='add',
+        key=person.id,
         params=(person,),
         serializer=Serializer.CLOUDPICKLE
     )
