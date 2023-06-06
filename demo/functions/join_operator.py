@@ -12,8 +12,11 @@ async def stateless_join(ctx: StatefulFunction, items: list, left_attribute_inde
     # Where the list represent a 'database row'
     left_items = {}
     right_items = {}
+    # Divide the items to their respective dictionaries based on the second tuple element
     for item in items:
         if item[1] == 'r':
+            # Immediately map (hash) the items per key that they should be joined on
+            # These left or right attribute indexes could be specified as environment variables instead of being passed from the upstream operator
             if item[0][right_attribute_index] not in right_items.keys:
                 right_items[item[0][right_attribute_index]] = [item[0]]
             else:
@@ -24,11 +27,16 @@ async def stateless_join(ctx: StatefulFunction, items: list, left_attribute_inde
             else:
                 left_items[item[0][left_attribute_index]].append(item[0])
 
+
+    # Create the joined results
     joined_result = []
+    # Look for all the matching keys
     for key in left_items.keys():
         if key in right_items.keys():
             for left_row in left_items[key]:
                 for right_row in right_items[key]:
+                    # Create a joined output for all possible combinations;
+                    # Simple copy all the values from 'left' items and add all values from the 'right' items except that we value that we joined on.
                     joined_row = left_row
                     for index in range(len(right_row)):
                         if index == right_attribute_index:
@@ -36,6 +44,12 @@ async def stateless_join(ctx: StatefulFunction, items: list, left_attribute_inde
                         else:
                             joined_row.append(right_row[index])
                     joined_result.append(joined_row)
+
+    # Important to note here is that we expect only the values as input, so if we have one 'table' containing e.g. (e-mail, first name, age)
+    # When joining this with (first name, gender) input would look like: [(['email@address.com', 'Joe', 15], 'l'), (['Joe', 'male'], 'r')], 1, 0
+    # In this case the resulting output would be; [['email@address.com', 'Joe', 15, 'male']]
+    # The 1 and the 0 (left and right attribute index) could be specified as environment variables instead
+    # The list representation could be replaced with a map representation if prefered; {'e-mail': 'email@address.com', ...}
 
     return joined_result
 
@@ -66,6 +80,7 @@ async def stateful_join(ctx: StatefulFunction, items: list, left_attribute_index
                 left_items[item[0][left_attribute_index]].append(item[0])
 
     joined_result = []
+    # Iterate over left items, match with right items and the right items from the state
     for key in left_items.keys():
         if key in right_items.keys():
             for left_row in left_items[key]:
@@ -88,6 +103,7 @@ async def stateful_join(ctx: StatefulFunction, items: list, left_attribute_index
                             joined_row.append(right_row[index])
                     joined_result.append(joined_row)
 
+    # Iterate over the right items to match them with the left items in the state.
     for key in right_items.keys():
         if key in state['left_hash'].keys():
             for left_row in state['left_hash'][key]:
@@ -100,6 +116,7 @@ async def stateful_join(ctx: StatefulFunction, items: list, left_attribute_index
                             joined_row.append(right_row[index])
                     joined_result.append(joined_row)
 
+    # Add the new items to the state after the join results have been generated
     for key in left_items.keys():
         if key not in state['left_hash'].keys():
             state['left_hash'][key] = left_items[key]

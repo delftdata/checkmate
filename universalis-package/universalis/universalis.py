@@ -142,6 +142,12 @@ class Universalis:
                                                    self.coordinator_port,
                                                    {"__COM_TYPE__": 'SEND_EXECUTION_GRAPH',
                                                     "__MSG__": stateflow_graph})
+        
+    async def send_channel_list(self, list_of_channels: list[tuple[str, str, bool]]):
+        await self.networking_manager.send_message(self.coordinator_adr,
+                                                   self.coordinator_port,
+                                                   {"__COM_TYPE__": 'SEND_CHANNEL_LIST',
+                                                    "__MSG__": list_of_channels})
 
     async def start(self):
         await self.start_kafka_producer()

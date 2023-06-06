@@ -65,7 +65,7 @@ class CICCheckpointing(UncoordinatedCheckpointing):
     
     async def cic_cycle_detection(self, operator, cic_details):
         if cic_details == {}:
-            return False
+            return False, None
         cycle_detected = False
         sent_greater_and = False
         for id in self.sent_to[operator].keys():

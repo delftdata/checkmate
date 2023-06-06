@@ -43,7 +43,11 @@ class Worker:
 
     def __init__(self):
         self.checkpoint_protocol = None
+        self.checkpoint_interval = 5
         self.checkpointing = None
+
+        self.channel_list = None
+
         self.id: int = -1
         self.networking = NetworkingManager()
         self.router = None
@@ -119,8 +123,6 @@ class Worker:
                 # Necessary for uncoordinated checkpointing
                 incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
                 await self.checkpointing.set_last_messages_processed(payload.operator_name, incoming_channel, send_from['kafka_offset'])
-            elif self.checkpoint_protocol == 'COR':
-                await self.checkpointing.set_incoming_channels(payload.operator_name, send_from['sender_id'], send_from['operator_name'])
         return success
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
@@ -279,7 +281,7 @@ class Worker:
         if message_type == 'RUN_FUN':
             run_func_payload: RunFuncPayload = self.unpack_run_payload(message, msg.key, timestamp=msg.timestamp)
             logging.info(f'RUNNING FUNCTION FROM KAFKA: {run_func_payload.function_name} {run_func_payload.key}')
-            if not self.notified_coordinator:
+            if not self.notified_coordinator and self.checkpoint_protocol == 'COR':
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
             self.create_task(
@@ -309,7 +311,6 @@ class Worker:
         for source in sources:
             #Checkpoint the source operator
             outgoing_channels = await self.checkpointing.get_outgoing_channels(source)
-            #logging.warning(f'outgoing channels: {outgoing_channels}')
             #Send marker on all outgoing channels
             await self.take_snapshot(source, cor_round=round)
             for (id, operator) in outgoing_channels:
@@ -372,13 +373,16 @@ class Worker:
                         )
                     )
             case 'CHECKPOINT_PROTOCOL':
-                self.checkpoint_protocol = message
-                self.networking.set_checkpoint_protocol(message)
+                self.checkpoint_protocol = message[0]
+                self.checkpoint_interval = message[1]
+                self.networking.set_checkpoint_protocol(message[0])
+            case 'SEND_CHANNEL_LIST':
+                self.channel_list = message
             case 'TAKE_COORDINATED_CHECKPOINT':
                 if self.checkpoint_protocol == 'COR':
                     sources = await self.checkpointing.get_source_operators()
                     if len(sources) == 0:
-                        logging.warning('No source operators yet, nothing to checkpoint.')
+                        logging.warning('No source operators, nothing to checkpoint. Check if operator tree is supplied in generator.')
                     else:
                         await self.checkpoint_coordinated_sources(sources, message)
             case 'COORDINATED_MARKER':
@@ -455,7 +459,7 @@ class Worker:
             operator.attach_state_networking(self.local_state, self.networking, self.dns)
 
     async def handle_execution_plan(self, message):
-        worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator = message
+        worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator, partitions_to_ids = message
         self.networking.set_id(self.id)
         self.waiting_for_exe_graph = False
         match self.checkpoint_protocol:
@@ -482,14 +486,15 @@ class Worker:
                 await self.checkpointing.init_cic(self.total_partitions_per_operator.keys(), self.peers.keys())
                 del self.peers[self.id]
                 # START CHECKPOINTING DEPENDING ON PROTOCOL
-                self.create_task(self.communication_induced_checkpointing(5))
+                self.create_task(self.communication_induced_checkpointing(self.checkpoint_interval))
                 # CHANGE TO CIC OBJECT
                 await self.checkpointing.set_peers(self.peers)
             case 'UNC':
                 del self.peers[self.id]
-                self.create_task(self.uncoordinated_checkpointing(5))
+                self.create_task(self.uncoordinated_checkpointing(self.checkpoint_interval))
             case 'COR':
                 await self.checkpointing.set_peers(self.peers)
+                await self.checkpointing.process_channel_list(self.channel_list, worker_operators, partitions_to_ids)
             case _:
                 logging.info('no checkpointing started.')
         await self.networking.set_total_partitions_per_operator(self.total_partitions_per_operator)
@@ -512,8 +517,6 @@ class Worker:
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
             await asyncio.sleep(checkpoint_interval)
-            if isinstance(self.local_state, InMemoryOperatorState):
-                logging.warning(f'current state: {self.local_state.data}')
             for operator in self.total_partitions_per_operator.keys():
                 await self.take_snapshot(operator)
 
@@ -528,8 +531,6 @@ class Worker:
             current_time = time.time_ns() // 1000000
             last_snapshot_timestamp = await self.checkpointing.get_last_snapshot_timestamp(operator)
             if current_time > last_snapshot_timestamp + (checkpoint_interval*1000):
-                if isinstance(self.local_state, InMemoryOperatorState) and operator in self.local_state.data.keys():
-                    logging.warning(f'current state for {operator}: {self.local_state.data[operator]}')
                 await self.checkpointing.update_cic_checkpoint(operator)
                 cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
                 await self.take_snapshot(operator, cic_clock=cic_clock)
@@ -552,7 +553,7 @@ class Worker:
             if '__COM_TYPE__' not in deserialized_data:
                 logging.error(f"Deserialized data do not contain a message type")
             else:
-                self.create_task(self.worker_controller(deserialized_data, resp_adr))
+                await self.worker_controller(deserialized_data, resp_adr)
         await self.kafka_egress_producer_pool.close()
 
     @staticmethod
@@ -579,7 +580,7 @@ class Worker:
         logging.info(f"Worker id: {self.id}")
 
     async def main(self):
-        # self.create_task(self.simple_failure())
+        self.create_task(self.simple_failure())
         await self.register_to_coordinator()
         await self.start_tcp_service()
 

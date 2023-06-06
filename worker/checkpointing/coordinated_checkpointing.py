@@ -38,22 +38,39 @@ class CoordinatedCheckpointing:
             return self.outgoing_channels[operator]
         return set()
     
-    async def set_outgoing_channels(self, own_operator, host, port, outgoing_operator):
-        if own_operator in self.sink_operators.keys():
-            self.sink_operators.pop(own_operator)
-        id = await self.get_worker_id(host, port)
-        if own_operator not in self.outgoing_channels.keys():
-            self.outgoing_channels[own_operator] = set()
-        self.outgoing_channels[own_operator].add((id, outgoing_operator))
-        return self.outgoing_channels
-
-    async def set_incoming_channels(self, own_operator, sender_id, sender_operator):
-        if own_operator not in self.outgoing_channels.keys():
-            self.sink_operators[own_operator] = False
-        if own_operator not in self.incoming_channels.keys():
-            self.incoming_channels[own_operator] = {}
-        if (sender_id, sender_operator) not in self.incoming_channels[own_operator].keys():
-            self.incoming_channels[own_operator][(sender_id, sender_operator)] = False
+    async def process_channel_list(self, channel_list, worker_operators, partitions_to_ids):
+        partitions_per_operator = {}
+        for (op, part) in worker_operators:
+            if op.name not in partitions_per_operator.keys():
+                partitions_per_operator[op.name] = set()
+            partitions_per_operator[op.name].add(part)
+        for (fromOp, toOp, broadcast) in channel_list:
+            if fromOp is None:
+                self.source_operators.add(toOp)
+            elif toOp is None:
+                self.sink_operators[fromOp] = False
+            else:
+                if fromOp not in self.outgoing_channels.keys():
+                    self.outgoing_channels[fromOp] = set()
+                if toOp not in self.incoming_channels.keys():
+                    self.incoming_channels[toOp] = {}
+                if broadcast:
+                    for id in self.peers.keys():
+                        self.outgoing_channels[fromOp].add((id, toOp))
+                        self.incoming_channels[toOp][(id, fromOp)] = False
+                else:
+                    channel_ids = set()
+                    # First set all correct outgoing channels:
+                    for part in partitions_per_operator[fromOp]:
+                        channel_ids.add(partitions_to_ids[toOp][part])
+                    for id in channel_ids:
+                        self.outgoing_channels[fromOp].add((id, toOp))
+                    channel_ids = set()
+                    # Then set all correct incoming channels
+                    for part in partitions_per_operator[toOp]:
+                        channel_ids.add(partitions_to_ids[fromOp][part])
+                    for id in channel_ids:
+                        self.incoming_channels[toOp][(id, fromOp)] = False
 
     async def marker_received(self, message):
         sender_id, sender_operator, own_operator, _ = message
