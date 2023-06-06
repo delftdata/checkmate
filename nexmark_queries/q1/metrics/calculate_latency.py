@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 input_msgs = pd.read_csv('./results/q1/input.csv')
 output_msgs = pd.read_csv('./results/q1/output.csv')
+experiment_length= 60 # in seconds
 
 joined = pd.merge(input_msgs, output_msgs, on='request_id', how='outer')
 runtime = joined['timestamp_y'] - joined['timestamp_x']
@@ -45,18 +46,34 @@ bucket_id = -1
 
 granularity = 100  # 1 second (ms) (i.e. bucket size)
 
-for idx, t in enumerate(joined_sorted['timestamp_x']):
-    if t - start_time > granularity:
-        bucket_id += 1
-        start_time = t
-        latency_buckets[bucket_id] = [joined_sorted['timestamp_y'][idx] - joined_sorted['timestamp_x'][idx]]
+num_of_buckets = int(experiment_length*1000/granularity) + 1
+print(num_of_buckets)
+for i in range(num_of_buckets):
+    latency_buckets[i] = {}
+    if i == 0:
+        latency_buckets[i]['bound'] = joined_sorted['timestamp_x'][0]
     else:
-        latency_buckets[bucket_id].append(joined_sorted['timestamp_y'][idx] - joined_sorted['timestamp_x'][idx])
+        latency_buckets[i]['bound'] = latency_buckets[i-1]['bound'] + granularity
+    latency_buckets[i]['items'] = []    
+
+for idx, t in enumerate(joined_sorted['timestamp_x']):
+    for i in latency_buckets.keys():
+        if t < latency_buckets[i]['bound']:
+            latency_buckets[i]['items'].append(joined_sorted['timestamp_y'][idx] - joined_sorted['timestamp_x'][idx])
+            break
+
+# for idx, t in enumerate(joined_sorted['timestamp_x']):
+#     if t - start_time > granularity:
+#         bucket_id += 1
+#         start_time = t
+#         latency_buckets[bucket_id] = [joined_sorted['timestamp_y'][idx] - joined_sorted['timestamp_x'][idx]]
+#     else:
+#         latency_buckets[bucket_id].append(joined_sorted['timestamp_y'][idx] - joined_sorted['timestamp_x'][idx])
 
 # print(latency_buckets)
 
-latency_buckets_99: dict[int, float] = {k*100: np.percentile(v, 99) for k, v in latency_buckets.items() if v}
-latency_buckets_50: dict[int, float] = {k*100: np.percentile(v, 50) for k, v in latency_buckets.items() if v}
+latency_buckets_99: dict[int, float] = {k*100: np.percentile(v['items'], 99) for k, v in latency_buckets.items() if v['items'] != []}
+latency_buckets_50: dict[int, float] = {k*100: np.percentile(v['items'], 50) for k, v in latency_buckets.items() if v['items'] != []}
 
 # print(latency_buckets_99)
 # print(latency_buckets_50)
@@ -66,7 +83,10 @@ ax.plot(latency_buckets_99.keys(), latency_buckets_99.values(), linewidth=2.5, l
 ax.plot(latency_buckets_50.keys(), latency_buckets_50.values(), linewidth=2.5, label='50p')
 ax.set_xlabel('Time (ms)')
 ax.set_ylabel('Latency (ms)')
-ax.legend(bbox_to_anchor=(0.5, -0.2), loc="center", ncol=2)
+handles, labels = plt.gca().get_legend_handles_labels()
+order = [1,0]
+
+ax.legend([handles[idx] for idx in order],[labels[idx] for idx in order],bbox_to_anchor=(0.5, -0.2), loc="center", ncol=2)
 ax.set_title("NexMark Q1 - Uncoordinated")
 plt.tight_layout()
 plt.show()
