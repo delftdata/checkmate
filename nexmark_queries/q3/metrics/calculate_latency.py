@@ -1,0 +1,62 @@
+import json
+import pandas as pd
+import numpy as np
+import math
+import matplotlib.pyplot as plt
+
+input_msgs = pd.read_csv('./results/q3/input.csv')
+output_msgs = pd.read_csv('./results/q3/output.csv')
+experiment_length = 60 # in seconds
+
+joined = pd.merge(input_msgs, output_msgs, on='request_id', how='outer')
+responded = joined.dropna().sort_values('timestamp_x').reset_index()
+
+runtime = responded['timestamp_y'] - responded['timestamp_x']
+print(responded)
+
+print(f'min latency: {min(runtime)}ms')
+print(f'max latency: {max(runtime)}ms')
+print(f'average latency: {np.average(runtime)}ms')
+print(f'99%: {np.percentile(runtime, 99)}ms')
+print(f'95%: {np.percentile(runtime, 95)}ms')
+print(f'90%: {np.percentile(runtime, 90)}ms')
+print(f'75%: {np.percentile(runtime, 75)}ms')
+print(f'60%: {np.percentile(runtime, 60)}ms')
+print(f'50%: {np.percentile(runtime, 50)}ms')
+print(f'25%: {np.percentile(runtime, 25)}ms')
+print(f'10%: {np.percentile(runtime, 10)}ms')
+print(np.argmax(runtime))
+print(np.argmin(runtime))
+
+# missed = joined[joined['response'].isna()]
+# print(missed)
+
+
+start_time = -math.inf
+
+latency_buckets = {}
+bucket_id = -1
+granularity = 100  # 1 second (ms) (i.e. bucket size)
+num_of_buckets = int(experiment_length*1000/granularity) + 1
+print(num_of_buckets)
+for i in range(num_of_buckets):
+    latency_buckets[i] = {}
+    if i == 0:
+        latency_buckets[i]['bound'] = responded['timestamp_x'][0]
+    else:
+        latency_buckets[i]['bound'] = latency_buckets[i-1]['bound'] + granularity
+    latency_buckets[i]['items'] = []    
+
+for idx, t in enumerate(responded['timestamp_x']):
+    for i in latency_buckets.keys():
+        if t < latency_buckets[i]['bound']:
+            latency_buckets[i]['items'].append(responded['timestamp_y'][idx] - responded['timestamp_x'][idx])
+            break
+
+# print(latency_buckets)
+
+latency_buckets_99: dict[int, float] = {k*100: np.percentile(v['items'], 99) for k, v in latency_buckets.items() if v['items'] != []}
+latency_buckets_50: dict[int, float] = {k*100: np.percentile(v['items'], 50) for k, v in latency_buckets.items() if v['items'] != []}
+
+print(latency_buckets_50)
+print(latency_buckets_99)
