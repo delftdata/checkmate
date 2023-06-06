@@ -10,13 +10,7 @@ from universalis.common.stateflow_ingress import IngressTypes
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
-from operators import nexmark_graph
-from operators.nexmark_graph import bids_source_operator
-
-N_VALUES = 40000
-messages_per_second=10000
-sleeps_per_second = 100
-sleep_time = 0.00085
+from operators import q3_graph
 
 UNIVERSALIS_HOST: str = 'localhost'
 UNIVERSALIS_PORT: int = 8886
@@ -31,17 +25,19 @@ async def main():
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
-    await universalis.submit(nexmark_graph.g)
+    await universalis.submit(q3_graph.g)
 
     print('Graph submitted')
 
 
     time.sleep(1)
-    input("Press when you want to end")
+    input("Press when you want to start producing.")
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
+               "--query", "3",
                "--generator-parallelism", "1",
-               "--enable-bids-topic", "true",
+               "--enable-auctions-topic", "true",
+               "--enable-persons-topic", "true",
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",

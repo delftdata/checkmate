@@ -31,9 +31,9 @@ import org.apache.beam.sdk.nexmark.model.Person;
  * functions.
  */
 public class BidPersonAuctionSourceFunction extends Thread {
-    String PERSON_TOPIC = "person_source";
-    String BID_TOPIC = "bids_source";
-    String AUCTION_TOPIC = "auction_source";
+    String PERSON_TOPIC = "personsSource";
+    String BID_TOPIC = "bidsSource";
+    String AUCTION_TOPIC = "auctionsSource";
 
     Producer<byte[], byte[]> producer;
     ObjectMapper objectMapper;
@@ -80,7 +80,7 @@ public class BidPersonAuctionSourceFunction extends Thread {
             props.put("acks", "1");
             props.put("retries", "0");
             props.put("linger.ms", "10");
-            props.put("compression.type", "lz4");
+            props.put("compression.type", "gzip");
             props.put("batch.size", "50000");
             props.put("key.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer");
             props.put("value.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer");
@@ -443,13 +443,13 @@ public class BidPersonAuctionSourceFunction extends Thread {
             .packString("__OP_NAME__");
 
         if(event instanceof Person){
-            packer.packString("persons_source");
+            packer.packString("personsSource");
         }
         else if(event instanceof Auction){
-            packer.packString("auctions_source");
+            packer.packString("auctionsSource");
         }
         else{
-            packer.packString("bids_source");
+            packer.packString("bidsSource");
         }
         
         packer

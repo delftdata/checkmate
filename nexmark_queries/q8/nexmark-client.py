@@ -10,13 +10,8 @@ from universalis.common.stateflow_ingress import IngressTypes
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
-from operators import nexmark_graph
-from operators.nexmark_graph import bids_source_operator
-
-N_VALUES = 40000
-messages_per_second=10000
-sleeps_per_second = 100
-sleep_time = 0.00085
+from operators import q8_graph
+from operators.tumbling_window import tumbling_window_operator
 
 UNIVERSALIS_HOST: str = 'localhost'
 UNIVERSALIS_PORT: int = 8886
@@ -31,17 +26,36 @@ async def main():
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
-    await universalis.submit(nexmark_graph.g)
+    await universalis.submit(q8_graph.g)
 
     print('Graph submitted')
 
 
     time.sleep(1)
-    input("Press when you want to end")
+    input("Press when you want to start producing")
+
+
+        # QALI IDEA
+    # START WINDOW TRIGGER
+    tasks = []
+    for key in range(0,1):
+        tasks.append(universalis.send_kafka_event(operator=tumbling_window_operator,
+                                           key=key,
+                                           function="trigger",
+                                           params=(10, )
+                                           ))
+    responses = await asyncio.gather(*tasks)
+    print(responses)
+    tasks = []
+    # SEND REQUESTS
+    time.sleep(10)
+
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
+               "--query", "3",
                "--generator-parallelism", "1",
-               "--enable-bids-topic", "true",
+               "--enable-auctions-topic", "true",
+               "--enable-persons-topic", "true",
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",

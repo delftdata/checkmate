@@ -59,7 +59,7 @@ class StatefulFunction(Function):
             res = await self.run(*args)
             await self.__send_async_calls()
         except Exception as e:
-            logging.debug(traceback.format_exc())
+            logging.error(traceback.format_exc())
             return e
         else:
             return res
@@ -74,6 +74,10 @@ class StatefulFunction(Function):
     @property
     def lock(self):
         return self.__state.get_lock(self.key, self.__operator_name)
+    
+    @property
+    def operator_lock(self):
+        return self.__state.get_operator_lock(self.key, self.__operator_name)
 
     async def get(self):
         value = await self.__state.get(self.key, self.__operator_name)
@@ -83,6 +87,14 @@ class StatefulFunction(Function):
     async def put(self, value):
         logging.info(f'PUT: {self.key}:{value} in operator: {self.__operator_name}')
         await self.__state.put(self.key, value, self.__operator_name)
+
+    async def get_operator_state(self):
+        state = await self.__state.get_operator_state(self.__operator_name)
+        return state
+    
+    async def clean_operator_state(self):
+        await self.__state.clean_operator_state(self.__operator_name)
+
 
     async def __send_async_calls(self):
         n_remote_calls: int = len(self.__async_remote_calls)
@@ -106,7 +118,8 @@ class StatefulFunction(Function):
     async def call_remote_function_no_response(self,
                                                operator_name: str,
                                                function_name: Type | str, key,
-                                               params: tuple = tuple()):
+                                               params: tuple = tuple(),
+                                               serializer: Serializer = Serializer.MSGPACK):
         if isinstance(function_name, type):
             function_name = function_name.__name__
         partition, payload, operator_host, operator_port = self.__prepare_message_transmission(operator_name,
@@ -120,7 +133,7 @@ class StatefulFunction(Function):
                                              operator_port,
                                              {"__COM_TYPE__": 'RUN_FUN_REMOTE',
                                               "__MSG__": payload},
-                                             Serializer.MSGPACK,
+                                             serializer,
                                              sending_name=self.__operator_name,
                                              sending_partition=sender_partition)
 

@@ -18,6 +18,7 @@ from universalis.common.logging import logging
 from universalis.common.networking import NetworkingManager
 from universalis.common.operator import Operator
 from universalis.common.serialization import Serializer, msgpack_serialization, compressed_msgpack_serialization, compressed_msgpack_deserialization
+from worker.kafka_producer_pool import KafkaProducerPool
 from worker.operator_state.in_memory_state import InMemoryOperatorState
 from worker.operator_state.redis_state import RedisOperatorState
 from worker.operator_state.stateless import Stateless
@@ -50,7 +51,7 @@ class Worker:
         self.id: int = -1
         self.networking = NetworkingManager()
         self.router = None
-        self.kafka_egress_producer = None
+        self.kafka_egress_producer_pool = None
         self.operator_state_backend = None
         self.registered_operators: dict[tuple[str, int], Operator] = {}
         self.dns: dict[str, dict[str, tuple[str, int]]] = {}
@@ -111,10 +112,11 @@ class Worker:
             else:
                 kafka_response = response
             # If fallback add it to the fallback replies else to the response buffer
-            self.create_task(self.kafka_egress_producer.send_and_wait(
+            self.create_task(next(self.kafka_egress_producer_pool).send_and_wait(
                 EGRESS_TOPIC_NAME,
                 key=payload.request_id,
-                value=msgpack_serialization(kafka_response)
+                value=msgpack_serialization(kafka_response),
+                partition=self.id-1
             ))
         if send_from is not None:
             if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
@@ -189,22 +191,6 @@ class Worker:
         for (tp, offset) in to_replay:
             self.kafka_consumer.seek(tp, offset)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
-
-
-    async def start_kafka_egress_producer(self):
-        self.kafka_egress_producer = AIOKafkaProducer(
-            bootstrap_servers=[KAFKA_URL],
-            enable_idempotence=True,
-            compression_type="gzip"
-        )
-        while True:
-            try:
-                await self.kafka_egress_producer.start()
-            except KafkaConnectionError:
-                time.sleep(1)
-                logging.info("Waiting for Kafka")
-                continue
-            break
 
     async def start_kafka_consumer(self, topic_partitions: list[TopicPartition]):
         logging.info(f'Creating Kafka consumer for topic partitions: {topic_partitions}')
@@ -554,7 +540,8 @@ class Worker:
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
-        await self.start_kafka_egress_producer()
+        self.kafka_egress_producer_pool = KafkaProducerPool(self.id, KAFKA_URL, size=100)
+        await self.kafka_egress_producer_pool.start()
         logging.info(
             f"Worker TCP Server listening at 0.0.0.0:{SERVER_PORT} "
             f"IP:{self.networking.host_name}"
@@ -567,6 +554,7 @@ class Worker:
                 logging.error(f"Deserialized data do not contain a message type")
             else:
                 await self.worker_controller(deserialized_data, resp_adr)
+        await self.kafka_egress_producer_pool.close()
 
     @staticmethod
     def unpack_run_payload(
