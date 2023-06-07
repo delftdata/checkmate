@@ -4,6 +4,7 @@ import struct
 import socket
 import time
 import os
+import sys
 
 import zmq
 from aiozmq import create_zmq_stream, ZmqStream
@@ -63,6 +64,11 @@ class NetworkingManager:
         self.host_name: str = str(socket.gethostbyname(socket.gethostname()))
         self.last_messages_sent = {}
         self.total_partitions_per_operator = {}
+
+        self.total_network_size = 0
+        self.additional_cic_size = 0
+        self.additional_coordinated_size = 0
+        self.additional_uncoordinated_size = 0
 
         self.id = -1
 
@@ -146,6 +152,7 @@ class NetworkingManager:
             msg['__MSG__']['__CIC_DETAILS__'] = {}
             if self.checkpoint_protocol == 'CIC':
                 msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, sending_name, msg['__MSG__']['__OP_NAME__'])
+                self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
             msg['__MSG__']['__SENT_FROM__'] = sender_details
             msg['__MSG__']['__SENT_TO__'] = receiver_details
             receiving_name = msg['__MSG__']['__OP_NAME__']
@@ -155,8 +162,13 @@ class NetworkingManager:
                                                       partition=sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)
             msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
             self.last_messages_sent[sending_name][sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
-        msg = self.encode_message(msg, serializer)
-        socket_conn.zmq_socket.write((msg, ))
+        new_msg = self.encode_message(msg, serializer)
+        self.total_network_size += sys.getsizeof(new_msg)
+        if msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':
+            self.additional_uncoordinated_size += sys.getsizeof(new_msg)
+        elif msg['__COM_TYPE__'] == 'COORDINATED_MARKER' or msg['__COM_TYPE__'] == 'COORDINATED_ROUND_DONE':
+            self.additional_coordinated_size += sys.getsizeof(new_msg)
+        socket_conn.zmq_socket.write((new_msg, ))
 
     async def replay_message(self,
                              host,

@@ -275,7 +275,7 @@ class Worker:
         await self.networking.replay_message(receiver_info['host'], receiver_info['port'], deserialized_data)
 
     async def simple_failure(self):
-        await asyncio.sleep(20)
+        await asyncio.sleep(40)
         if self.id == 1:
             await self.networking.send_message(
                 DISCOVERY_HOST, DISCOVERY_PORT,
@@ -365,7 +365,7 @@ class Worker:
                 if message_type == 'RUN_FUN_REMOTE':
                     sender_details = message['__SENT_FROM__']
                     if self.checkpoint_protocol == 'COR' and await self.checkpointing.check_marker_received(message['__OP_NAME__'], sender_details['sender_id'], sender_details['operator_name']):
-                        logging.warning('Buffering message!')
+                        # logging.warning('Buffering message!')
                         self.message_buffer[message['__OP_NAME__']].append(message)
                     else:
                         logging.info('CALLED RUN FUN FROM PEER')
