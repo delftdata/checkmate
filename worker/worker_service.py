@@ -17,7 +17,7 @@ from universalis.common.local_state_backends import LocalStateBackend
 from universalis.common.logging import logging
 from universalis.common.networking import NetworkingManager
 from universalis.common.operator import Operator
-from universalis.common.serialization import Serializer, msgpack_serialization, compressed_msgpack_serialization, compressed_msgpack_deserialization
+from universalis.common.serialization import Serializer, compressed_cloudpickle_deserialization, compressed_cloudpickle_serialization, msgpack_serialization
 from worker.kafka_producer_pool import KafkaProducerPool
 from worker.operator_state.in_memory_state import InMemoryOperatorState
 from worker.operator_state.redis_state import RedisOperatorState
@@ -145,7 +145,7 @@ class Worker:
                         logging.warning('Unknown protocol, no snapshot data added.')
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
                 logging.warning(f'Local state data for {operator}: {self.local_state.data[operator]}')
-                bytes_file: bytes = compressed_msgpack_serialization(snapshot_data)
+                bytes_file: bytes = compressed_cloudpickle_serialization(snapshot_data)
             snapshot_time = cor_round
             if snapshot_time == -1:
                 snapshot_time = time.time_ns() // 1000000
@@ -178,7 +178,7 @@ class Worker:
             object_name=snapshot_to_restore
         ).data
         async with self.snapshot_state_lock:
-            deserialized_data = compressed_msgpack_deserialization(state_to_restore)
+            deserialized_data = compressed_cloudpickle_deserialization(state_to_restore)
             self.local_state.data[operator_name] = deserialized_data['local_state_data']
         last_kafka_consumed = {}
         if 'last_kafka_consumed' in deserialized_data.keys():
