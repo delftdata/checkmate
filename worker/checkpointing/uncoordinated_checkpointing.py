@@ -34,7 +34,7 @@ class UncoordinatedCheckpointing:
     async def get_last_snapshot_timestamp(self, operator):
         return self.last_snapshot_timestamp[operator]
 
-    async def get_snapshot_data(self, operator, last_messages_sent):
+    def get_snapshot_data(self, operator, last_messages_sent):
         snapshot_data = {}
         snapshot_data['last_messages_sent'] = last_messages_sent
         snapshot_data['last_messages_processed'] = self.last_messages_processed[operator]
@@ -43,7 +43,7 @@ class UncoordinatedCheckpointing:
         self.last_messages_processed[operator] = {}
         self.last_snapshot_timestamp[operator] = time.time_ns() // 1000000
         return snapshot_data
-    
+
     async def restore_snapshot_data(self, operator_name, last_messages_processed, last_messages_sent, last_kafka_consumed):
         self.last_messages_processed[operator_name] = last_messages_processed
         self.last_messages_sent[operator_name] = last_messages_sent
@@ -57,13 +57,13 @@ class UncoordinatedCheckpointing:
                     to_replay.append((TopicPartition(operator_name, int(partition)), 0))
             self.last_kafka_consumed[operator_name] = last_kafka_consumed
         return to_replay
-    
+
     async def find_last_sent_offset(self, channel):
         replay_until = None
         if channel in self.last_messages_sent.keys():
             replay_until = self.last_messages_sent[channel]
         return replay_until
-    
+
     async def reset_messages_processed(self, operator):
         self.last_messages_processed[operator] = {}
         tp_to_reset = []
