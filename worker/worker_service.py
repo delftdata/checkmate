@@ -82,50 +82,51 @@ class Worker(object):
             payload: RunFuncPayload,
             send_from=None
     ) -> bool:
-        success: bool = True
-        operator_partition = self.registered_operators[(payload.operator_name, payload.partition)]
-        response = await operator_partition.run_function(
-            payload.key,
-            payload.request_id,
-            payload.timestamp,
-            payload.function_name,
-            payload.params
-        )
-        # If exception we need to add it to the application logic aborts
-        if isinstance(response, Exception):
-            success = False
-        # If request response send the response
-        if payload.response_socket is not None:
-            self.router.write(
-                (payload.response_socket, self.networking.encode_message(
-                    response,
-                    Serializer.MSGPACK
-                ))
+        async with self.snapshot_state_lock:
+            success: bool = True
+            operator_partition = self.registered_operators[(payload.operator_name, payload.partition)]
+            response = await operator_partition.run_function(
+                payload.key,
+                payload.request_id,
+                payload.timestamp,
+                payload.function_name,
+                payload.params
             )
-        # If we have a response, and it's not part of the chain send it to kafka
-        elif response is not None:
-            # If Exception transform it to string for Kafka
+            # If exception we need to add it to the application logic aborts
             if isinstance(response, Exception):
-                kafka_response = str(response)
-            else:
-                kafka_response = response
-            # If fallback add it to the fallback replies else to the response buffer
-            self.create_task(next(self.kafka_egress_producer_pool).send_and_wait(
-                EGRESS_TOPIC_NAME,
-                key=payload.request_id,
-                value=msgpack_serialization(kafka_response),
-                partition=self.id-1
-            ))
-        if send_from is not None:
-            if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
-                # Necessary for uncoordinated checkpointing
-                tmp_str = send_from['operator_partition'] * self.total_partitions_per_operator[payload.operator_name] \
-                          + payload.partition
-                incoming_channel = f"{send_from['operator_name']}_{payload.operator_name}_{tmp_str}"
-                await self.checkpointing.set_last_messages_processed(payload.operator_name,
-                                                                     incoming_channel,
-                                                                     send_from['kafka_offset'])
-        return success
+                success = False
+            # If request response send the response
+            if payload.response_socket is not None:
+                self.router.write(
+                    (payload.response_socket, self.networking.encode_message(
+                        response,
+                        Serializer.MSGPACK
+                    ))
+                )
+            # If we have a response, and it's not part of the chain send it to kafka
+            elif response is not None:
+                # If Exception transform it to string for Kafka
+                if isinstance(response, Exception):
+                    kafka_response = str(response)
+                else:
+                    kafka_response = response
+                # If fallback add it to the fallback replies else to the response buffer
+                self.create_task(next(self.kafka_egress_producer_pool).send_and_wait(
+                    EGRESS_TOPIC_NAME,
+                    key=payload.request_id,
+                    value=msgpack_serialization(kafka_response),
+                    partition=self.id-1
+                ))
+            if send_from is not None:
+                if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
+                    # Necessary for uncoordinated checkpointing
+                    tmp_str = send_from['operator_partition'] * self.total_partitions_per_operator[payload.operator_name] \
+                              + payload.partition
+                    incoming_channel = f"{send_from['operator_name']}_{payload.operator_name}_{tmp_str}"
+                    await self.checkpointing.set_last_messages_processed(payload.operator_name,
+                                                                         incoming_channel,
+                                                                         send_from['kafka_offset'])
+            return success
 
     @staticmethod
     def async_snapshot(
