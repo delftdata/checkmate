@@ -592,6 +592,7 @@ class Worker:
                 logging.error(f"Deserialized data do not contain a message type")
             else:
                 await self.worker_controller(deserialized_data, resp_adr)
+        await self.kafka_egress_producer_pool.close()
 
     @staticmethod
     def unpack_run_payload(

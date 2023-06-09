@@ -149,19 +149,20 @@ class NetworkingManager:
             'port': port
         }
         if msg['__COM_TYPE__'] == 'RUN_FUN_REMOTE':
-            msg['__MSG__']['__CIC_DETAILS__'] = {}
-            if self.checkpoint_protocol == 'CIC':
-                msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, sending_name, msg['__MSG__']['__OP_NAME__'])
-                self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
             msg['__MSG__']['__SENT_FROM__'] = sender_details
             msg['__MSG__']['__SENT_TO__'] = receiver_details
-            receiving_name = msg['__MSG__']['__OP_NAME__']
-            receiving_partition = msg['__MSG__']['__PARTITION__']
-            kafka_data = await self.kafka_producer.send_and_wait(sending_name+receiving_name,
-                                                      value=self.encode_message(msg, serializer),
-                                                      partition=sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)
-            msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
-            self.last_messages_sent[sending_name][sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
+            if self.checkpoint_protocol in ['UNC', 'CIC']:
+                msg['__MSG__']['__CIC_DETAILS__'] = {}
+                if self.checkpoint_protocol == 'CIC':
+                    msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, sending_name, msg['__MSG__']['__OP_NAME__'])
+                    self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
+                receiving_name = msg['__MSG__']['__OP_NAME__']
+                receiving_partition = msg['__MSG__']['__PARTITION__']
+                kafka_data = await self.kafka_producer.send_and_wait(sending_name+receiving_name,
+                                                        value=self.encode_message(msg, serializer),
+                                                        partition=sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)
+                msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
+                self.last_messages_sent[sending_name][sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
         new_msg = self.encode_message(msg, serializer)
         self.total_network_size += sys.getsizeof(new_msg)
         if msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':

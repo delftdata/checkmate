@@ -27,6 +27,7 @@ async def stateless_join(ctx: StatefulFunction, items: list, left_attribute_inde
             else:
                 left_items[item[0][left_attribute_index]].append(item[0])
 
+
     # Create the joined results
     joined_result = []
     # Look for all the matching keys
