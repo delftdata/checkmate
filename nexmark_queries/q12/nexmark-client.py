@@ -10,7 +10,7 @@ from universalis.common.stateflow_ingress import IngressTypes
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
-from operators import q8_graph
+from operators import q12_graph
 from operators.tumbling_window import tumbling_window_operator
 
 UNIVERSALIS_HOST: str = 'localhost'
@@ -26,7 +26,7 @@ async def main():
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
-    await universalis.submit(q8_graph.g)
+    await universalis.submit(q12_graph.g)
 
     print('Graph submitted')
 
