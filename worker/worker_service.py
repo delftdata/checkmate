@@ -204,14 +204,6 @@ class Worker:
         for (tp, offset) in to_replay:
             self.kafka_consumer.seek(tp, offset)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
-        await self.networking.send_message(
-            DISCOVERY_HOST, DISCOVERY_PORT,
-            {
-                "__COM_TYPE__": 'RECOVERY_DONE',
-                "__MSG__": self.id
-            },
-            Serializer.MSGPACK
-        )
 
     async def start_kafka_consumer(self, topic_partitions: list[TopicPartition]):
         logging.info(f'Creating Kafka consumer for topic partitions: {topic_partitions}')
@@ -239,15 +231,15 @@ class Worker:
             await self.kafka_consumer.stop()
             await self.networking.stop_kafka_producer()
 
-    async def replay_from_kafka(self, channel, offset):
-        replay_until = await self.checkpointing.find_last_sent_offset(channel)
+    async def replay_from_kafka(self, operator_name, channel, offset):
+        replay_until = await self.checkpointing.find_last_sent_offset(operator_name, channel)
         sent_op, rec_op, partition = channel.split('_')
         # Create a kafka consumer for the given channel and seek the given offset.
         # For every kafka message, send over TCP without logging the message sent.
         replay_consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
         topic_partition = TopicPartition(sent_op+rec_op, int(partition))
         replay_consumer.assign([topic_partition])
-        while True:
+        while True: 
             # start the kafka consumer
             try:
                 await replay_consumer.start()
@@ -446,7 +438,16 @@ class Worker:
                                 await self.restore_from_snapshot(snapshot_to_restore, op_name)
                             # Replay channels from corresponding offsets in message[1]
                             for channel in message[op_name][1].keys():
-                                await self.replay_from_kafka(channel, message[op_name][1][channel])
+                                await self.replay_from_kafka(op_name, channel, message[op_name][1][channel])
+                                logging.warning(f"replayed channel {channel}")
+                            await self.networking.send_message(
+                                DISCOVERY_HOST, DISCOVERY_PORT,
+                                {
+                                    "__COM_TYPE__": 'RECOVERY_DONE',
+                                    "__MSG__": self.id
+                                },
+                                Serializer.MSGPACK
+                            )
                     case 'COR':
                         for op_name in self.total_partitions_per_operator.keys():
                             if message == -1:
@@ -459,6 +460,14 @@ class Worker:
                                 # Build the snapshot name from the recovery message received
                                 snapshot_to_restore = f'snapshot_{self.id}_{op_name}_{message}.bin'
                                 await self.restore_from_snapshot(snapshot_to_restore, op_name)
+                                await self.networking.send_message(
+                                    DISCOVERY_HOST, DISCOVERY_PORT,
+                                    {
+                                        "__COM_TYPE__": 'RECOVERY_DONE',
+                                        "__MSG__": self.id
+                                    },
+                                    Serializer.MSGPACK
+                                )
                     case _:
                         logging.warning('Snapshot restore message received for unknown protocol, no restoration.')
             case 'RECEIVE_EXE_PLN':  # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
@@ -525,6 +534,8 @@ class Worker:
             case 'CIC':
                 # CHANGE TO CIC OBJECT
                 await self.checkpointing.init_cic(self.total_partitions_per_operator.keys(), self.peers.keys())
+                for operator in self.total_partitions_per_operator.keys():
+                    await self.checkpointing.update_cic_checkpoint(operator)
                 del self.peers[self.id]
                 # START CHECKPOINTING DEPENDING ON PROTOCOL
                 self.create_task(self.communication_induced_checkpointing(self.checkpoint_interval))

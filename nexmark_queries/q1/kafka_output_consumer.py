@@ -12,7 +12,8 @@ async def consume():
         'universalis-egress',
         key_deserializer=msgpack_deserialization,
         value_deserializer=msgpack_deserialization,
-        bootstrap_servers='localhost:9093')
+        bootstrap_servers='localhost:9093',
+        auto_offset_reset='earliest')
     # consumer = AIOKafkaConsumer(
     #     'universalis-egress',
     #     key_deserializer=msgpack_deserialization,
