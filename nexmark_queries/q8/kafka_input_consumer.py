@@ -26,7 +26,7 @@ async def consume():
     finally:
         # Will leave consumer group; perform autocommit if enabled.
         await consumer.stop()
-        pd.DataFrame.from_records(records, columns=['request_id', 'request', 'timestamp']).to_csv('./results/q3/input.csv',
+        pd.DataFrame.from_records(records, columns=['request_id', 'request', 'timestamp']).to_csv('./results/q8/input.csv',
                                                                                                    index=False)
 
 uvloop.install()

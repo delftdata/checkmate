@@ -11,7 +11,7 @@ experiment_length= 60 # in seconds
 joined = pd.merge(input_msgs, output_msgs, on='request_id', how='outer')
 runtime = joined['timestamp_y'] - joined['timestamp_x']
 
-joined_sorted = joined.sort_values('timestamp_x')
+joined_sorted = joined.sort_values('timestamp_x').reset_index()
 
 runtime_no_nan = runtime.dropna()
 print(f'min latency: {min(runtime_no_nan)}ms')
