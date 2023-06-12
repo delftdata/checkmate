@@ -24,7 +24,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'COR'
+CHECKPOINT_PROTOCOL: str = 'UNC'
 
 CHECKPOINT_INTERVAL: int = 5
 
@@ -32,6 +32,7 @@ class CoordinatorService:
 
     def __init__(self):
         self.networking = NetworkingManager()
+        self.networking.set_checkpoint_protocol(CHECKPOINT_PROTOCOL)
         self.coordinator = Coordinator(WORKER_PORT)
         # background task references
         self.background_tasks = set()
@@ -74,12 +75,6 @@ class CoordinatorService:
         self.total_checkpointing_time = 0
         self.cor_start_time = 0
         self.amount_of_checkpoints = 0
-
-        # Can simply count all non-protocol messages
-        # should however somehow add message size as well.
-        self.protocol_messages_sent = 0
-
-        self.throughput_per_second = {}
 
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
@@ -343,6 +338,28 @@ class CoordinatorService:
     async def get_metrics(self):
         while(True):
             await asyncio.sleep(60)
+            logging.warning('GETTING METRICS!')
+            offsets_per_second = {}
+            total_network_size = 0
+            protocol_specific_size = 0
+            for worker_id in self.worker_ips.keys():
+                worker_offsets, worker_tns, worker_pss = await self.networking.send_message_request_response(
+                    self.worker_ips[worker_id], WORKER_PORT,
+                    {
+                        "__COM_TYPE__": 'GET_METRICS',
+                        "__MSG__": ''
+                    },
+                    Serializer.MSGPACK
+                )
+                for op in worker_offsets.keys():
+                    if op not in offsets_per_second.keys():
+                        offsets_per_second[op] = {}
+                    for part in worker_offsets[op].keys():
+                        offsets_per_second[op][part] = worker_offsets[op][part]
+                total_network_size += worker_tns
+                protocol_specific_size += worker_pss
+            total_network_size += await self.networking.get_total_network_size()
+            protocol_specific_size += await self.networking.get_protocol_network_size()
             logging.warning(f'Amount of useless checkpoints: {self.useless_checkpoints}')
             if self.amount_of_failures > 0:
                 logging.warning(f'Average recovery time: {self.total_recovery_time / self.amount_of_failures}')
@@ -355,8 +372,8 @@ class CoordinatorService:
                     if self.amount_of_checkpoints > 0:
                         avg_cp_time = self.total_checkpointing_time / self.amount_of_checkpoints
             logging.warning(f'Average checkpointing time: {avg_cp_time}')
-            logging.warning(f'Amount of messages: {self.protocol_messages_sent}')
-            logging.warning(f'Throughputs per second: {self.throughput_per_second}')
+            logging.warning(f'Total network size: {total_network_size}, protocol size: {protocol_specific_size}')
+            logging.warning(f'offsets per second: {offsets_per_second}')
 
     def init_snapshot_minio_bucket(self):
         try:
@@ -427,15 +444,6 @@ class CoordinatorService:
                             },
                             Serializer.MSGPACK
                         )
-                    case 'THROUGHPUT_INFO':
-                        sender_id, timestamp, offsets = message
-                        for topic in offsets.keys():
-                            if topic not in self.throughput_per_second.keys():
-                                self.throughput_per_second[topic] = {}
-                            for part in offsets[topic].keys():
-                                if part not in self.throughput_per_second[topic].keys():
-                                    self.throughput_per_second[topic][part] = []
-                                self.throughput_per_second[topic][part].append(offsets[topic][part])
                     case 'STARTED_PROCESSING':
                         self.started_processing[message] = True
                         start_checkpointing = True

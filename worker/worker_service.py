@@ -80,6 +80,8 @@ class Worker:
         self.notified_coordinator = False
         self.message_buffer = {}
 
+        self.offsets_per_second = {}
+
     async def run_function(
             self,
             payload: RunFuncPayload,
@@ -179,7 +181,7 @@ class Worker:
                     Serializer.MSGPACK
                 )
             timestamp_five = time.time_ns() // 1000000
-            logging.warning(f'timestamp times for operator {operator}; flushing buffer: {timestamp_two - timestamp_one}, compressing data: {timestamp_three - timestamp_two}, writing to bucket: {timestamp_four - timestamp_three}, snapshot data: {timestamp_five - timestamp_four}')
+            #logging.warning(f'timestamp times for operator {operator}; flushing buffer: {timestamp_two - timestamp_one}, compressing data: {timestamp_three - timestamp_two}, writing to bucket: {timestamp_four - timestamp_three}, snapshot data: {timestamp_five - timestamp_four}')
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
@@ -397,6 +399,11 @@ class Worker:
                 self.networking.set_checkpoint_protocol(message[0])
             case 'SEND_CHANNEL_LIST':
                 self.channel_list = message
+            case 'GET_METRICS':
+                logging.warning('METRIC REQUEST RECEIVED.')
+                return_value = (self.offsets_per_second, await self.networking.get_total_network_size(), await self.networking.get_protocol_network_size())
+                reply = self.networking.encode_message(return_value, Serializer.MSGPACK)
+                self.router.write((resp_adr, reply))
             case 'TAKE_COORDINATED_CHECKPOINT':
                 if self.checkpoint_protocol == 'COR':
                     sources = await self.checkpointing.get_source_operators()
@@ -480,16 +487,14 @@ class Worker:
     async def send_throughputs(self):
         while(True):
             await asyncio.sleep(1)
-            timestamp = time.time_ns() // 1000000
             offsets = await self.checkpointing.get_offsets()
-            await self.networking.send_message(
-                DISCOVERY_HOST, DISCOVERY_PORT,
-                {
-                    "__COM_TYPE__": 'THROUGHPUT_INFO',
-                    "__MSG__": (self.id, timestamp, offsets)
-                },
-                Serializer.MSGPACK
-            )
+            for operator in offsets.keys():
+                if operator not in self.offsets_per_second.keys():
+                    self.offsets_per_second[operator] = {}
+                for part in offsets[operator].keys():
+                    if part not in self.offsets_per_second[operator].keys():
+                        self.offsets_per_second[operator][part] = []
+                    self.offsets_per_second[operator][part].append(offsets[operator][part])
 
     async def handle_execution_plan(self, message):
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator, partitions_to_ids = message

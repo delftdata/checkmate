@@ -84,6 +84,20 @@ class NetworkingManager:
     def set_checkpointing(self, checkpointing):
         self.checkpointing = checkpointing
 
+    async def get_total_network_size(self):
+        return self.total_network_size
+
+    async def get_protocol_network_size(self):
+        match self.checkpoint_protocol:
+            case 'COR':
+                return self.additional_coordinated_size
+            case 'CIC':
+                return self.additional_cic_size
+            case 'UNC':
+                return self.additional_uncoordinated_size
+            case _:
+                return 0
+
     async def start_kafka_producer(self):
         # Set the batch_size and linger_ms to a high number and use manual flushes to commit to kafka.
         self.kafka_producer = AIOKafkaProducer(bootstrap_servers=[KAFKA_URL],
@@ -166,8 +180,10 @@ class NetworkingManager:
         new_msg = self.encode_message(msg, serializer)
         self.total_network_size += sys.getsizeof(new_msg)
         if msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':
-            self.additional_uncoordinated_size += sys.getsizeof(new_msg)
-        elif msg['__COM_TYPE__'] == 'COORDINATED_MARKER' or msg['__COM_TYPE__'] == 'COORDINATED_ROUND_DONE':
+            size = sys.getsizeof(new_msg)
+            self.additional_uncoordinated_size += size
+            self.additional_cic_size += size
+        elif msg['__COM_TYPE__'] in ['COORDINATED_MARKER', 'COORDINATED_ROUND_DONE', 'TAKE_COORDINATED_CHECKPOINT']:
             self.additional_coordinated_size += sys.getsizeof(new_msg)
         socket_conn.zmq_socket.write((new_msg, ))
 
