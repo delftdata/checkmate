@@ -24,7 +24,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'UNC'
+CHECKPOINT_PROTOCOL: str = 'CIC'
 
 CHECKPOINT_INTERVAL: int = 5
 
@@ -337,7 +337,7 @@ class CoordinatorService:
 
     async def get_metrics(self):
         while(True):
-            await asyncio.sleep(60)
+            await asyncio.sleep(120)
             logging.warning('GETTING METRICS!')
             offsets_per_second = {}
             total_network_size = 0
