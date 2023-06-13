@@ -1,6 +1,8 @@
 import time
 from aiokafka import TopicPartition
 
+from universalis.common.logging import logging
+
 class UncoordinatedCheckpointing:
     def __init__(self):
         self.id = -1
@@ -20,6 +22,9 @@ class UncoordinatedCheckpointing:
 
     async def set_last_messages_processed(self, operator, channel, offset):
         self.last_messages_processed[operator][channel] = offset
+
+    async def get_offsets(self):
+        return self.last_kafka_consumed
 
     def set_consumed_offset(self, topic, partition, offset):
         if topic not in self.last_kafka_consumed:
@@ -58,10 +63,10 @@ class UncoordinatedCheckpointing:
             self.last_kafka_consumed[operator_name] = last_kafka_consumed
         return to_replay
     
-    async def find_last_sent_offset(self, channel):
+    async def find_last_sent_offset(self, operator, channel):
         replay_until = None
-        if channel in self.last_messages_sent.keys():
-            replay_until = self.last_messages_sent[channel]
+        if channel in self.last_messages_sent[operator].keys():
+            replay_until = self.last_messages_sent[operator][channel]
         return replay_until
     
     async def reset_messages_processed(self, operator):

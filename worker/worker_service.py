@@ -2,6 +2,7 @@ import asyncio
 import io
 import os
 import time
+import random
 from timeit import default_timer as timer
 from math import ceil
 
@@ -79,6 +80,8 @@ class Worker:
         self.notified_coordinator = False
         self.message_buffer = {}
 
+        self.offsets_per_second = {}
+
     async def run_function(
             self,
             payload: RunFuncPayload,
@@ -128,10 +131,13 @@ class Worker:
     # if you want to use this run it with self.create_task(self.take_snapshot())
     async def take_snapshot(self, operator, cic_clock=0, cor_round=-1):
         if isinstance(self.local_state, InMemoryOperatorState):
+            snapshot_start = time.time_ns() // 1000000
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
+                timestamp_one = time.time_ns() // 1000000
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
                 last_messages_sent = await self.networking.flush_kafka_buffer(operator)
+                timestamp_two = time.time_ns() // 1000000
                 snapshot_data = {}
                 match self.checkpoint_protocol:
                     case 'UNC':
@@ -144,7 +150,8 @@ class Worker:
                     case _:
                         logging.warning('Unknown protocol, no snapshot data added.')
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
-                logging.warning(f'Local state data for {operator}: {self.local_state.data[operator]}')
+                # logging.warning(f'Local state data for {operator}: {self.local_state.data[operator]}')
+                timestamp_three = time.time_ns() // 1000000
                 bytes_file: bytes = compressed_cloudpickle_serialization(snapshot_data)
             snapshot_time = cor_round
             if snapshot_time == -1:
@@ -156,11 +163,15 @@ class Worker:
                 data=io.BytesIO(bytes_file),
                 length=len(bytes_file)
             )
+            timestamp_four = time.time_ns() // 1000000
             if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
                 coordinator_info = {}
                 coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
                 coordinator_info['last_messages_sent'] = last_messages_sent
                 coordinator_info['snapshot_name'] = snapshot_name
+                snapshot_duration = (time.time_ns() // 1000000) - snapshot_start
+                coordinator_info['snapshot_duration'] = snapshot_duration
+                #logging.warning(f'Snapshot done, took: {snapshot_duration}')
                 await self.networking.send_message(
                     DISCOVERY_HOST, DISCOVERY_PORT,
                     {
@@ -169,6 +180,8 @@ class Worker:
                     },
                     Serializer.MSGPACK
                 )
+            timestamp_five = time.time_ns() // 1000000
+            #logging.warning(f'timestamp times for operator {operator}; flushing buffer: {timestamp_two - timestamp_one}, compressing data: {timestamp_three - timestamp_two}, writing to bucket: {timestamp_four - timestamp_three}, snapshot data: {timestamp_five - timestamp_four}')
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
@@ -218,15 +231,15 @@ class Worker:
             await self.kafka_consumer.stop()
             await self.networking.stop_kafka_producer()
 
-    async def replay_from_kafka(self, channel, offset):
-        replay_until = await self.checkpointing.find_last_sent_offset(channel)
+    async def replay_from_kafka(self, operator_name, channel, offset):
+        replay_until = await self.checkpointing.find_last_sent_offset(operator_name, channel)
         sent_op, rec_op, partition = channel.split('_')
         # Create a kafka consumer for the given channel and seek the given offset.
         # For every kafka message, send over TCP without logging the message sent.
         replay_consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
         topic_partition = TopicPartition(sent_op+rec_op, int(partition))
         replay_consumer.assign([topic_partition])
-        while True:
+        while True: 
             # start the kafka consumer
             try:
                 await replay_consumer.start()
@@ -346,7 +359,7 @@ class Worker:
                 if message_type == 'RUN_FUN_REMOTE':
                     sender_details = message['__SENT_FROM__']
                     if self.checkpoint_protocol == 'COR' and await self.checkpointing.check_marker_received(message['__OP_NAME__'], sender_details['sender_id'], sender_details['operator_name']):
-                        logging.warning('Buffering message!')
+                        # logging.warning('Buffering message!')
                         self.message_buffer[message['__OP_NAME__']].append(message)
                     else:
                         logging.info('CALLED RUN FUN FROM PEER')
@@ -378,6 +391,11 @@ class Worker:
                 self.networking.set_checkpoint_protocol(message[0])
             case 'SEND_CHANNEL_LIST':
                 self.channel_list = message
+            case 'GET_METRICS':
+                logging.warning('METRIC REQUEST RECEIVED.')
+                return_value = (self.offsets_per_second, await self.networking.get_total_network_size(), await self.networking.get_protocol_network_size())
+                reply = self.networking.encode_message(return_value, Serializer.MSGPACK)
+                self.router.write((resp_adr, reply))
             case 'TAKE_COORDINATED_CHECKPOINT':
                 if self.checkpoint_protocol == 'COR':
                     sources = await self.checkpointing.get_source_operators()
@@ -401,7 +419,7 @@ class Worker:
                             Serializer.MSGPACK
                         )
             case 'RECOVER_FROM_SNAPSHOT':
-                logging.warning(f'Recovery message received: {message}')
+                logging.warning(f'Recovery message received.')
                 match self.checkpoint_protocol:
                     case 'CIC' | 'UNC':
                         for op_name in message.keys():
@@ -420,7 +438,16 @@ class Worker:
                                 await self.restore_from_snapshot(snapshot_to_restore, op_name)
                             # Replay channels from corresponding offsets in message[1]
                             for channel in message[op_name][1].keys():
-                                await self.replay_from_kafka(channel, message[op_name][1][channel])
+                                await self.replay_from_kafka(op_name, channel, message[op_name][1][channel])
+                                logging.warning(f"replayed channel {channel}")
+                            await self.networking.send_message(
+                                DISCOVERY_HOST, DISCOVERY_PORT,
+                                {
+                                    "__COM_TYPE__": 'RECOVERY_DONE',
+                                    "__MSG__": self.id
+                                },
+                                Serializer.MSGPACK
+                            )
                     case 'COR':
                         for op_name in self.total_partitions_per_operator.keys():
                             if message == -1:
@@ -433,6 +460,14 @@ class Worker:
                                 # Build the snapshot name from the recovery message received
                                 snapshot_to_restore = f'snapshot_{self.id}_{op_name}_{message}.bin'
                                 await self.restore_from_snapshot(snapshot_to_restore, op_name)
+                                await self.networking.send_message(
+                                    DISCOVERY_HOST, DISCOVERY_PORT,
+                                    {
+                                        "__COM_TYPE__": 'RECOVERY_DONE',
+                                        "__MSG__": self.id
+                                    },
+                                    Serializer.MSGPACK
+                                )
                     case _:
                         logging.warning('Snapshot restore message received for unknown protocol, no restoration.')
             case 'RECEIVE_EXE_PLN':  # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
@@ -458,6 +493,18 @@ class Worker:
         for operator in self.registered_operators.values():
             operator.attach_state_networking(self.local_state, self.networking, self.dns)
 
+    async def send_throughputs(self):
+        while(True):
+            await asyncio.sleep(1)
+            offsets = await self.checkpointing.get_offsets()
+            for operator in offsets.keys():
+                if operator not in self.offsets_per_second.keys():
+                    self.offsets_per_second[operator] = {}
+                for part in offsets[operator].keys():
+                    if part not in self.offsets_per_second[operator].keys():
+                        self.offsets_per_second[operator][part] = []
+                    self.offsets_per_second[operator][part].append(offsets[operator][part])
+
     async def handle_execution_plan(self, message):
         worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator, partitions_to_ids = message
         self.networking.set_id(self.id)
@@ -480,10 +527,15 @@ class Worker:
                 logging.warning('Not supported value is set for CHECKPOINTING_PROTOCOL, continue without checkpoints.')
         self.networking.set_checkpointing(self.checkpointing)
 
+        self.create_task(self.send_throughputs())
+        self.create_task(self.simple_failure())
+
         match self.checkpoint_protocol:
             case 'CIC':
                 # CHANGE TO CIC OBJECT
                 await self.checkpointing.init_cic(self.total_partitions_per_operator.keys(), self.peers.keys())
+                for operator in self.total_partitions_per_operator.keys():
+                    await self.checkpointing.update_cic_checkpoint(operator)
                 del self.peers[self.id]
                 # START CHECKPOINTING DEPENDING ON PROTOCOL
                 self.create_task(self.communication_induced_checkpointing(self.checkpoint_interval))
@@ -516,7 +568,8 @@ class Worker:
 
     async def uncoordinated_checkpointing(self, checkpoint_interval):
         while True:
-            await asyncio.sleep(checkpoint_interval)
+            interval_randomness = random.randint(checkpoint_interval - 1, checkpoint_interval + 1)
+            await asyncio.sleep(interval_randomness)
             for operator in self.total_partitions_per_operator.keys():
                 await self.take_snapshot(operator)
 
@@ -528,15 +581,16 @@ class Worker:
 
     async def cic_per_operator(self, checkpoint_interval, operator):
         while True:
+            interval_randomness = random.randint(checkpoint_interval-1, checkpoint_interval+1)
             current_time = time.time_ns() // 1000000
             last_snapshot_timestamp = await self.checkpointing.get_last_snapshot_timestamp(operator)
-            if current_time > last_snapshot_timestamp + (checkpoint_interval*1000):
+            if current_time > last_snapshot_timestamp + (interval_randomness*1000):
                 await self.checkpointing.update_cic_checkpoint(operator)
                 cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
                 await self.take_snapshot(operator, cic_clock=cic_clock)
-                await asyncio.sleep(checkpoint_interval)
+                await asyncio.sleep(interval_randomness)
             else:
-                await asyncio.sleep(ceil(((last_snapshot_timestamp + (checkpoint_interval*1000)) - current_time) / 1000))
+                await asyncio.sleep(ceil(((last_snapshot_timestamp + (interval_randomness*1000)) - current_time) / 1000))
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
@@ -580,7 +634,6 @@ class Worker:
         logging.info(f"Worker id: {self.id}")
 
     async def main(self):
-        # self.create_task(self.simple_failure())
         await self.register_to_coordinator()
         await self.start_tcp_service()
 

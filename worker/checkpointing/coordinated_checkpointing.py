@@ -38,6 +38,9 @@ class CoordinatedCheckpointing:
             return self.outgoing_channels[operator]
         return set()
     
+    async def get_offsets(self):
+        return self.last_kafka_consumed
+    
     async def process_channel_list(self, channel_list, worker_operators, partitions_to_ids):
         partitions_per_operator = {}
         for (op, part) in worker_operators:
@@ -62,13 +65,13 @@ class CoordinatedCheckpointing:
                     channel_ids = set()
                     # First set all correct outgoing channels:
                     for part in partitions_per_operator[fromOp]:
-                        channel_ids.add(partitions_to_ids[toOp][part])
+                        channel_ids.add(partitions_to_ids[toOp][str(part)])
                     for id in channel_ids:
                         self.outgoing_channels[fromOp].add((id, toOp))
                     channel_ids = set()
                     # Then set all correct incoming channels
                     for part in partitions_per_operator[toOp]:
-                        channel_ids.add(partitions_to_ids[fromOp][part])
+                        channel_ids.add(partitions_to_ids[fromOp][str(part)])
                     for id in channel_ids:
                         self.incoming_channels[toOp][(id, fromOp)] = False
 

@@ -4,6 +4,7 @@ import struct
 import socket
 import time
 import os
+import sys
 
 import zmq
 from aiozmq import create_zmq_stream, ZmqStream
@@ -64,6 +65,11 @@ class NetworkingManager:
         self.last_messages_sent = {}
         self.total_partitions_per_operator = {}
 
+        self.total_network_size = 0
+        self.additional_cic_size = 0
+        self.additional_coordinated_size = 0
+        self.additional_uncoordinated_size = 0
+
         self.id = -1
 
         self.checkpointing = None
@@ -77,6 +83,20 @@ class NetworkingManager:
 
     def set_checkpointing(self, checkpointing):
         self.checkpointing = checkpointing
+
+    async def get_total_network_size(self):
+        return self.total_network_size
+
+    async def get_protocol_network_size(self):
+        match self.checkpoint_protocol:
+            case 'COR':
+                return self.additional_coordinated_size
+            case 'CIC':
+                return self.additional_cic_size
+            case 'UNC':
+                return self.additional_uncoordinated_size
+            case _:
+                return 0
 
     async def start_kafka_producer(self):
         # Set the batch_size and linger_ms to a high number and use manual flushes to commit to kafka.
@@ -149,6 +169,7 @@ class NetworkingManager:
                 msg['__MSG__']['__CIC_DETAILS__'] = {}
                 if self.checkpoint_protocol == 'CIC':
                     msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, sending_name, msg['__MSG__']['__OP_NAME__'])
+                    self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
                 receiving_name = msg['__MSG__']['__OP_NAME__']
                 receiving_partition = msg['__MSG__']['__PARTITION__']
                 kafka_data = await self.kafka_producer.send_and_wait(sending_name+receiving_name,
@@ -156,8 +177,15 @@ class NetworkingManager:
                                                         partition=sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)
                 msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
                 self.last_messages_sent[sending_name][sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
-        msg = self.encode_message(msg, serializer)
-        socket_conn.zmq_socket.write((msg, ))
+        new_msg = self.encode_message(msg, serializer)
+        self.total_network_size += sys.getsizeof(new_msg)
+        if msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':
+            size = sys.getsizeof(new_msg)
+            self.additional_uncoordinated_size += size
+            self.additional_cic_size += size
+        elif msg['__COM_TYPE__'] in ['COORDINATED_MARKER', 'COORDINATED_ROUND_DONE', 'TAKE_COORDINATED_CHECKPOINT']:
+            self.additional_coordinated_size += sys.getsizeof(new_msg)
+        socket_conn.zmq_socket.write((new_msg, ))
 
     async def replay_message(self,
                              host,

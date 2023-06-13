@@ -2,6 +2,7 @@ import asyncio
 import os
 import bisect
 import math
+import time
 
 import aiozmq
 import uvloop
@@ -23,7 +24,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = ''
+CHECKPOINT_PROTOCOL: str = 'COR'
 
 CHECKPOINT_INTERVAL: int = 5
 
@@ -31,6 +32,7 @@ class CoordinatorService:
 
     def __init__(self):
         self.networking = NetworkingManager()
+        self.networking.set_checkpoint_protocol(CHECKPOINT_PROTOCOL)
         self.coordinator = Coordinator(WORKER_PORT)
         # background task references
         self.background_tasks = set()
@@ -60,6 +62,19 @@ class CoordinatorService:
         #Send out checkpointing, only when all workers are done, increase round and wait for next checkpointing.
         self.done_checkpointing = {}
         self.last_confirmed_checkpoint_round = -1
+
+        # Benchmarking metrics
+        self.useless_checkpoints = 0
+
+        self.failure_time = 0
+        self.amount_of_failures = 0
+        self.total_recovery_time = 0
+        self.recovery_done = {}
+
+        # Checkpointing time can either be a summation of all rounds (cor) or summation of all individual checkpoint times (unc, cic)
+        self.total_checkpointing_time = 0
+        self.cor_start_time = 0
+        self.amount_of_checkpoints = 0
 
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
@@ -101,6 +116,7 @@ class CoordinatorService:
                         if index < 0:
                             logging.error("Even the first snapshot got marked, this should not be possible. Index smaller then zero.")
                         else:
+                            self.useless_checkpoints += 1
                             # Replace it with the checkpoint before the marked one and repeat the process.
                             self.recovery_graph_root_set[worker_id][op_name] = int(self.snapshot_timestamps[worker_id][op_name][index])
                             root_set_changed = True
@@ -272,6 +288,8 @@ class CoordinatorService:
 
     # Processes the information sent from the worker about a snapshot.
     async def process_snapshot_information(self, message):
+        self.amount_of_checkpoints += 1
+        self.total_checkpointing_time += message['snapshot_duration']
         snapshot_name = message['snapshot_name'].replace('.bin', '').split('_')
         # Store the snapshot timestamp in a sorted list
         bisect.insort(self.snapshot_timestamps[snapshot_name[1]][snapshot_name[2]], int(snapshot_name[3]))
@@ -315,6 +333,47 @@ class CoordinatorService:
                 },
                 Serializer.MSGPACK
             )
+        self.cor_start_time = time.time_ns() // 1000000
+
+    async def get_metrics(self):
+        while(True):
+            await asyncio.sleep(120)
+            logging.warning('GETTING METRICS!')
+            offsets_per_second = {}
+            total_network_size = 0
+            protocol_specific_size = 0
+            for worker_id in self.worker_ips.keys():
+                worker_offsets, worker_tns, worker_pss = await self.networking.send_message_request_response(
+                    self.worker_ips[worker_id], WORKER_PORT,
+                    {
+                        "__COM_TYPE__": 'GET_METRICS',
+                        "__MSG__": ''
+                    },
+                    Serializer.MSGPACK
+                )
+                for op in worker_offsets.keys():
+                    if op not in offsets_per_second.keys():
+                        offsets_per_second[op] = {}
+                    for part in worker_offsets[op].keys():
+                        offsets_per_second[op][part] = worker_offsets[op][part]
+                total_network_size += worker_tns
+                protocol_specific_size += worker_pss
+            total_network_size += await self.networking.get_total_network_size()
+            protocol_specific_size += await self.networking.get_protocol_network_size()
+            logging.warning(f'Amount of useless checkpoints: {self.useless_checkpoints}')
+            if self.amount_of_failures > 0:
+                logging.warning(f'Average recovery time: {self.total_recovery_time / self.amount_of_failures}')
+            avg_cp_time = 0
+            match CHECKPOINT_PROTOCOL:
+                case 'COR':
+                    if self.checkpoint_round > 0:
+                        avg_cp_time = self.total_checkpointing_time / self.checkpoint_round
+                case _:
+                    if self.amount_of_checkpoints > 0:
+                        avg_cp_time = self.total_checkpointing_time / self.amount_of_checkpoints
+            logging.warning(f'Average checkpointing time: {avg_cp_time}')
+            logging.warning(f'Total network size: {total_network_size}, protocol size: {protocol_specific_size}')
+            logging.warning(f'offsets per second: {offsets_per_second}')
 
     def init_snapshot_minio_bucket(self):
         try:
@@ -324,6 +383,7 @@ class CoordinatorService:
             logging.warning("Unable to create minio bucket")
 
     async def main(self):
+        self.create_task(self.get_metrics())
         router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")  # coordinator
         logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT}")
         # ADD DIFFERENT LOGIC FOR TESTING STATE RECOVERY
@@ -374,6 +434,7 @@ class CoordinatorService:
                         self.messages_to_replay[str(assigned_id)] = {}
                         self.started_processing[assigned_id] = False
                         self.done_checkpointing[assigned_id] = False
+                        self.recovery_done[assigned_id] = False
                         logging.info(f"Worker registered {message} with id {reply}")
                         await self.networking.send_message(
                             message, WORKER_PORT,
@@ -391,12 +452,22 @@ class CoordinatorService:
                         if start_checkpointing:
                             logging.warning('All workers started processing, starting coordinated checkpointing.')
                             self.create_task(self.coordinated_checkpointing(CHECKPOINT_INTERVAL))
+                    case 'RECOVERY_DONE':
+                        self.recovery_done[message] = True
+                        all_workers_done = True
+                        for id in self.recovery_done.keys():
+                            all_workers_done = all_workers_done and self.recovery_done[id]
+                        if all_workers_done:
+                            self.total_recovery_time += ((time.time_ns() // 1000000) - self.failure_time)
+                            for id in self.recovery_done.keys():
+                                self.recovery_done[id] = False
                     case 'COORDINATED_ROUND_DONE':
                         self.done_checkpointing[message[0]] = True
                         all_workers_done = True
                         for id in self.done_checkpointing.keys():
                             all_workers_done = all_workers_done and self.done_checkpointing[id]
                         if all_workers_done:
+                            self.total_checkpointing_time += ((time.time_ns() // 1000000) - self.cor_start_time)
                             for id in self.done_checkpointing.keys():
                                 self.done_checkpointing[id] = False
                             self.last_confirmed_checkpoint_round = message[1]
@@ -404,6 +475,8 @@ class CoordinatorService:
                     case 'SNAPSHOT_TAKEN':
                         await self.process_snapshot_information(message)
                     case 'WORKER_FAILED':
+                        self.failure_time = time.time_ns() // 1000000
+                        self.amount_of_failures += 1
                         if CHECKPOINT_PROTOCOL == 'COR':
                             for worker_id in self.worker_ips.keys():
                                 await self.networking.send_message(

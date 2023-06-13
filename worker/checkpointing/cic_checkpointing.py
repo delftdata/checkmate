@@ -1,3 +1,4 @@
+from universalis.common.logging import logging
 from worker.checkpointing.uncoordinated_checkpointing import UncoordinatedCheckpointing
 
 class CICCheckpointing(UncoordinatedCheckpointing):
