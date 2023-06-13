@@ -65,12 +65,16 @@ class Worker(object):
         # background task references
         self.background_tasks = set()
         self.total_partitions_per_operator = {}
+        self.function_tasks = set()
         # snapshot
         self.minio_client: Minio = Minio(
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY, secure=False
         )
         self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
+        # snapshot event
+        self.snapshot_event: asyncio.Event = asyncio.Event()
+        self.snapshot_event.set()
         # CIC variables
         self.waiting_for_exe_graph = True
         # Coordinated variables
@@ -85,51 +89,53 @@ class Worker(object):
             payload: RunFuncPayload,
             send_from=None
     ) -> bool:
-        async with self.snapshot_state_lock:
-            success: bool = True
-            operator_partition = self.registered_operators[(payload.operator_name, payload.partition)]
-            response = await operator_partition.run_function(
-                payload.key,
-                payload.request_id,
-                payload.timestamp,
-                payload.function_name,
-                payload.params
-            )
-            # If exception we need to add it to the application logic aborts
-            if isinstance(response, Exception):
-                success = False
-            # If request response send the response
-            if payload.response_socket is not None:
-                self.router.write(
-                    (payload.response_socket, self.networking.encode_message(
-                        response,
-                        Serializer.MSGPACK
-                    ))
-                )
-            # If we have a response, and it's not part of the chain send it to kafka
-            elif response is not None:
-                # If Exception transform it to string for Kafka
-                if isinstance(response, Exception):
-                    kafka_response = str(response)
-                else:
-                    kafka_response = response
-                # If fallback add it to the fallback replies else to the response buffer
-                self.create_task(next(self.kafka_egress_producer_pool).send_and_wait(
-                    EGRESS_TOPIC_NAME,
-                    key=payload.request_id,
-                    value=msgpack_serialization(kafka_response),
-                    partition=self.id-1
+        # logging.warning(f"run_function -> snapshot_event: {self.snapshot_event.is_set()}")
+        await self.snapshot_event.wait()
+        success: bool = True
+        operator_partition = self.registered_operators[(payload.operator_name, payload.partition)]
+        response = await operator_partition.run_function(
+            payload.key,
+            payload.request_id,
+            payload.timestamp,
+            payload.function_name,
+            payload.params
+        )
+    
+        # If exception we need to add it to the application logic aborts
+        if isinstance(response, Exception):
+            success = False
+        # If request response send the response
+        if payload.response_socket is not None:
+            self.router.write(
+                (payload.response_socket, self.networking.encode_message(
+                    response,
+                    Serializer.MSGPACK
                 ))
-            if send_from is not None:
-                if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
-                    # Necessary for uncoordinated checkpointing
-                    tmp_str = send_from['operator_partition'] * self.total_partitions_per_operator[payload.operator_name] \
-                              + payload.partition
-                    incoming_channel = f"{send_from['operator_name']}_{payload.operator_name}_{tmp_str}"
-                    await self.checkpointing.set_last_messages_processed(payload.operator_name,
-                                                                         incoming_channel,
-                                                                         send_from['kafka_offset'])
-            return success
+            )
+        # If we have a response, and it's not part of the chain send it to kafka
+        elif response is not None:
+            # If Exception transform it to string for Kafka
+            if isinstance(response, Exception):
+                kafka_response = str(response)
+            else:
+                kafka_response = response
+            # If fallback add it to the fallback replies else to the response buffer
+            self.create_task(next(self.kafka_egress_producer_pool).send_and_wait(
+                EGRESS_TOPIC_NAME,
+                key=payload.request_id,
+                value=msgpack_serialization(kafka_response),
+                partition=self.id-1
+            ))
+        if send_from is not None:
+            if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
+                # Necessary for uncoordinated checkpointing
+                tmp_str = send_from['operator_partition'] * self.total_partitions_per_operator[payload.operator_name] \
+                            + payload.partition
+                incoming_channel = f"{send_from['operator_name']}_{payload.operator_name}_{tmp_str}"
+                await self.checkpointing.set_last_messages_processed(payload.operator_name,
+                                                                        incoming_channel,
+                                                                        send_from['kafka_offset'])
+        return success
 
     @staticmethod
     def async_snapshot(
@@ -165,7 +171,10 @@ class Worker(object):
         if isinstance(self.local_state, InMemoryOperatorState):
             snapshot_start = time.time_ns() // 1000000
             self.local_state: InMemoryOperatorState
+            self.snapshot_event.clear()
             async with self.snapshot_state_lock:
+                await asyncio.gather(*self.function_tasks)
+                self.function_tasks = set()
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
                 last_messages_sent = await self.networking.flush_kafka_buffer(operator)
                 snapshot_data = {}
@@ -194,6 +203,7 @@ class Worker(object):
                 loop = asyncio.get_running_loop()
                 loop.run_in_executor(pool, self.async_snapshot,
                                      snapshot_name, snapshot_data, self.networking.encode_message, coordinator_info)
+            self.snapshot_event.set()
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
@@ -236,6 +246,7 @@ class Worker(object):
         try:
             # Consume messages
             while True:
+                await self.snapshot_event.wait()
                 result = await self.kafka_consumer.getmany(timeout_ms=1)
                 for _, messages in result.items():
                     if messages:
@@ -312,7 +323,7 @@ class Worker(object):
             if not self.notified_coordinator and self.checkpoint_protocol == 'COR':
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
-            self.create_task(
+            self.create_run_function_task(
                 self.run_function(
                     run_func_payload
                 )
@@ -334,6 +345,12 @@ class Worker(object):
         task = asyncio.create_task(coroutine)
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
+    
+    def create_run_function_task(self, coroutine):
+        task = asyncio.create_task(coroutine)
+        self.function_tasks.add(task)
+        task.add_done_callback(self.function_tasks.discard)
+
 
     async def checkpoint_coordinated_sources(self, pool, sources, _round):
         for source in sources:
@@ -362,7 +379,7 @@ class Worker(object):
         if operator in self.message_buffer.keys():
             for message in self.message_buffer[operator]:
                 payload = self.unpack_run_payload(message, message['__RQ_ID__'])
-                self.create_task(self.run_function(payload, send_from=message['__SENT_FROM__']))
+                self.create_run_function_task(self.run_function(payload, send_from=message['__SENT_FROM__']))
             self.message_buffer[operator] = []
 
     async def worker_controller(self, pool: concurrent.futures.ProcessPoolExecutor, deserialized_data, resp_adr):
@@ -392,7 +409,7 @@ class Worker(object):
                                 # await self.networking.update_cic_checkpoint(oper_name)
                                 await self.take_snapshot(pool, message['__OP_NAME__'], cic_clock=cic_clock)
                         payload = self.unpack_run_payload(message, request_id)
-                        self.create_task(
+                        self.create_run_function_task(
                             self.run_function(
                                 payload, send_from=sender_details
                             )
@@ -400,7 +417,7 @@ class Worker(object):
                 else:
                     logging.info('CALLED RUN FUN RQ RS FROM PEER')
                     payload = self.unpack_run_payload(message, request_id, response_socket=resp_adr)
-                    self.create_task(
+                    self.create_run_function_task(
                         self.run_function(
                             payload
                         )
@@ -549,8 +566,8 @@ class Worker(object):
                 logging.warning('Not supported value is set for CHECKPOINTING_PROTOCOL, continue without checkpoints.')
         self.networking.set_checkpointing(self.checkpointing)
 
-        self.create_task(self.send_throughputs())
-        self.create_task(self.simple_failure())
+        # self.create_task(self.send_throughputs())
+        # self.create_task(self.simple_failure())
 
         match self.checkpoint_protocol:
             case 'CIC':
