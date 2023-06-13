@@ -580,7 +580,7 @@ class Worker:
         logging.info(f"Worker id: {self.id}")
 
     async def main(self):
-        self.create_task(self.simple_failure())
+        # self.create_task(self.simple_failure())
         await self.register_to_coordinator()
         await self.start_tcp_service()
 

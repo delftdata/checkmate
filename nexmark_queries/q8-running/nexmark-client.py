@@ -10,7 +10,7 @@ from universalis.common.stateflow_ingress import IngressTypes
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
-from operators import q12_graph
+from operators import q8_graph
 from operators.tumbling_window import tumbling_window_operator
 
 UNIVERSALIS_HOST: str = 'localhost'
@@ -26,7 +26,7 @@ async def main():
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
-    await universalis.submit(q12_graph.g)
+    await universalis.submit(q8_graph.g)
 
     print('Graph submitted')
 
@@ -52,9 +52,10 @@ async def main():
 
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
-               "--query", "1",
+               "--query", "3",
                "--generator-parallelism", "1",
-               "--enable-bids-topic", "true",
+               "--enable-auctions-topic", "true",
+               "--enable-persons-topic", "true",
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",

@@ -12,12 +12,8 @@ async def consume():
         'universalis-egress',
         key_deserializer=msgpack_deserialization,
         value_deserializer=msgpack_deserialization,
-        bootstrap_servers='localhost:9093')
-    # consumer = AIOKafkaConsumer(
-    #     'universalis-egress',
-    #     key_deserializer=msgpack_deserialization,
-    #     value_deserializer=msgpack_deserialization,
-    #     bootstrap_servers='10.105.96.86:9094')
+        bootstrap_servers='localhost:9093',
+        auto_offset_reset="earliest")
     await consumer.start()
     try:
         # Consume messages
@@ -27,7 +23,7 @@ async def consume():
     finally:
         # Will leave consumer group; perform autocommit if enabled.
         await consumer.stop()
-        pd.DataFrame.from_records(records, columns=['request_id', 'response', 'timestamp']).to_csv('output.csv',
+        pd.DataFrame.from_records(records, columns=['request_id', 'response', 'timestamp']).to_csv('./results/q1/output.csv',
                                                                                                    index=False)
 
 uvloop.install()
