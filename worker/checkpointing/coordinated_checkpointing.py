@@ -140,7 +140,7 @@ class CoordinatedCheckpointing:
             self.last_kafka_consumed[topic] = {}
         self.last_kafka_consumed[topic][str(partition)] = offset
 
-    async def get_snapshot_data(self, operator):
+    def get_snapshot_data(self, operator):
         snapshot_data = {}
         if operator in self.last_kafka_consumed.keys():
             snapshot_data['last_kafka_consumed'] = self.last_kafka_consumed[operator]

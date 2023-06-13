@@ -31,4 +31,5 @@ async def consume():
 
 uvloop.install()
 
+
 asyncio.run(consume())

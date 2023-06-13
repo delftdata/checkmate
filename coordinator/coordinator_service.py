@@ -12,7 +12,6 @@ from universalis.common.logging import logging
 from universalis.common.networking import NetworkingManager
 from universalis.common.serialization import Serializer, cloudpickle_deserialization
 from minio import Minio
-from miniopy_async import Minio as Minio_async
 
 from coordinator import Coordinator
 
@@ -24,7 +23,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'COR'
+CHECKPOINT_PROTOCOL: str = 'CIC'
 
 CHECKPOINT_INTERVAL: int = 5
 
@@ -38,10 +37,6 @@ class CoordinatorService:
         self.background_tasks = set()
         self.worker_ips: dict[int, str] = {}
         self.minio_client: Minio = Minio(
-            MINIO_URL, access_key=MINIO_ACCESS_KEY,
-            secret_key=MINIO_SECRET_KEY, secure=False
-        )
-        self.minio_client_async: Minio_async = Minio_async(
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY, secure=False
         )
