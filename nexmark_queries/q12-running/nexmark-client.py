@@ -30,15 +30,6 @@ async def main():
 
     print('Graph submitted')
 
-    channel_list = [
-        (None, 'bidsSource', False),
-        ('bidsSource', 'tumblingWindow', True),
-        ('tumblingWindow', 'count', False),
-        ('count', 'sink', False),
-        ('sink', None, False)
-    ]
-
-    await universalis.send_channel_list(channel_list)
 
     time.sleep(1)
     input("Press when you want to start producing")

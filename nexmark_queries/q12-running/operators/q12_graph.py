@@ -10,6 +10,6 @@ from .tumbling_window import tumbling_window_operator
 ####################################################################################################################
 # DECLARE A STATEFLOW GRAPH ########################################################################################
 ####################################################################################################################
-g = StateflowGraph('nexmark_q8', operator_state_backend=LocalStateBackend.DICT)
+g = StateflowGraph('nexmark_q12', operator_state_backend=LocalStateBackend.DICT)
 ####################################################################################################################
 g.add_operators(bids_source_operator, tumbling_window_operator, count_operator, sink_operator)

@@ -80,7 +80,6 @@ public class BidPersonAuctionSourceFunction extends Thread {
             props.put("acks", "1");
             props.put("retries", "0");
             props.put("linger.ms", "10");
-            props.put("compression.type", "gzip");
             props.put("batch.size", "50000");
             props.put("key.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer");
             props.put("value.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer");
