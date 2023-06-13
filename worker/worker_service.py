@@ -5,20 +5,21 @@ import time
 import random
 from timeit import default_timer as timer
 from math import ceil
+import concurrent.futures
 
 import aiozmq
 import uvloop
 import zmq
-from aiokafka import AIOKafkaConsumer, TopicPartition, AIOKafkaProducer
+from aiokafka import AIOKafkaConsumer, TopicPartition
 from aiokafka.errors import UnknownTopicOrPartitionError, KafkaConnectionError
 from minio import Minio
-from miniopy_async import Minio as Minio_async
 
 from universalis.common.local_state_backends import LocalStateBackend
 from universalis.common.logging import logging
 from universalis.common.networking import NetworkingManager
 from universalis.common.operator import Operator
 from universalis.common.serialization import Serializer, compressed_cloudpickle_deserialization, compressed_cloudpickle_serialization, msgpack_serialization
+
 from worker.kafka_producer_pool import KafkaProducerPool
 from worker.operator_state.in_memory_state import InMemoryOperatorState
 from worker.operator_state.redis_state import RedisOperatorState
@@ -40,7 +41,8 @@ MINIO_ACCESS_KEY: str = os.environ['MINIO_ROOT_USER']
 MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
-class Worker:
+
+class Worker(object):
 
     def __init__(self):
         self.checkpoint_protocol = None
@@ -57,7 +59,8 @@ class Worker:
         self.registered_operators: dict[tuple[str, int], Operator] = {}
         self.dns: dict[str, dict[str, tuple[str, int]]] = {}
         self.topic_partitions: list[TopicPartition] = []
-        self.peers: dict[int, tuple[str, int]] = {}  # worker_id: (host, port)
+        # worker_id: (host, port)
+        self.peers: dict[int, tuple[str, int]] = {}
         self.local_state: InMemoryOperatorState | RedisOperatorState | Stateless = Stateless()
         # background task references
         self.background_tasks = set()
@@ -67,121 +70,130 @@ class Worker:
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY, secure=False
         )
-        self.minio_client_async: Minio_async = Minio_async(
-            MINIO_URL, access_key=MINIO_ACCESS_KEY,
-            secret_key=MINIO_SECRET_KEY, secure=False
-        )
         self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
-
         # CIC variables
         self.waiting_for_exe_graph = True
-
-        #Coordinated variables
+        # Coordinated variables
         self.notified_coordinator = False
         self.message_buffer = {}
 
         self.offsets_per_second = {}
+        self.kafka_consumer: AIOKafkaConsumer = ...
 
     async def run_function(
             self,
             payload: RunFuncPayload,
-            send_from = None
+            send_from=None
     ) -> bool:
-        success: bool = True
-        operator_partition = self.registered_operators[(payload.operator_name, payload.partition)]
-        response = await operator_partition.run_function(
-            payload.key,
-            payload.request_id,
-            payload.timestamp,
-            payload.function_name,
-            payload.params
-        )
-        # If exception we need to add it to the application logic aborts
-        if isinstance(response, Exception):
-            success = False
-        # If request response send the response
-        if payload.response_socket is not None:
-            self.router.write(
-                (payload.response_socket, self.networking.encode_message(
-                    response,
-                    Serializer.MSGPACK
-                ))
+        async with self.snapshot_state_lock:
+            success: bool = True
+            operator_partition = self.registered_operators[(payload.operator_name, payload.partition)]
+            response = await operator_partition.run_function(
+                payload.key,
+                payload.request_id,
+                payload.timestamp,
+                payload.function_name,
+                payload.params
             )
-        # If we have a response, and it's not part of the chain send it to kafka
-        elif response is not None:
-            # If Exception transform it to string for Kafka
+            # If exception we need to add it to the application logic aborts
             if isinstance(response, Exception):
-                kafka_response = str(response)
-            else:
-                kafka_response = response
-            # If fallback add it to the fallback replies else to the response buffer
-            self.create_task(next(self.kafka_egress_producer_pool).send_and_wait(
-                EGRESS_TOPIC_NAME,
-                key=payload.request_id,
-                value=msgpack_serialization(kafka_response),
-                partition=self.id-1
-            ))
-        if send_from is not None:
-            if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
-                # Necessary for uncoordinated checkpointing
-                incoming_channel = send_from['operator_name'] +'_'+ payload.operator_name +'_'+ str(send_from['operator_partition']*(self.total_partitions_per_operator[payload.operator_name]) + payload.partition)
-                await self.checkpointing.set_last_messages_processed(payload.operator_name, incoming_channel, send_from['kafka_offset'])
-        return success
+                success = False
+            # If request response send the response
+            if payload.response_socket is not None:
+                self.router.write(
+                    (payload.response_socket, self.networking.encode_message(
+                        response,
+                        Serializer.MSGPACK
+                    ))
+                )
+            # If we have a response, and it's not part of the chain send it to kafka
+            elif response is not None:
+                # If Exception transform it to string for Kafka
+                if isinstance(response, Exception):
+                    kafka_response = str(response)
+                else:
+                    kafka_response = response
+                # If fallback add it to the fallback replies else to the response buffer
+                self.create_task(next(self.kafka_egress_producer_pool).send_and_wait(
+                    EGRESS_TOPIC_NAME,
+                    key=payload.request_id,
+                    value=msgpack_serialization(kafka_response),
+                    partition=self.id-1
+                ))
+            if send_from is not None:
+                if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
+                    # Necessary for uncoordinated checkpointing
+                    tmp_str = send_from['operator_partition'] * self.total_partitions_per_operator[payload.operator_name] \
+                              + payload.partition
+                    incoming_channel = f"{send_from['operator_name']}_{payload.operator_name}_{tmp_str}"
+                    await self.checkpointing.set_last_messages_processed(payload.operator_name,
+                                                                         incoming_channel,
+                                                                         send_from['kafka_offset'])
+            return success
+
+    @staticmethod
+    def async_snapshot(
+            snapshot_name,
+            snapshot_data,
+            message_encoder,
+            coordinator_info: dict | None = None):
+        minio_client: Minio = Minio(
+            MINIO_URL, access_key=MINIO_ACCESS_KEY,
+            secret_key=MINIO_SECRET_KEY, secure=False
+        )
+        bytes_file: bytes = compressed_cloudpickle_serialization(snapshot_data)
+        minio_client.put_object(bucket_name=SNAPSHOT_BUCKET_NAME,
+                                object_name=snapshot_name,
+                                data=io.BytesIO(bytes_file),
+                                length=len(bytes_file))
+
+        if coordinator_info is not None:
+            msg = message_encoder(
+                {
+                    "__COM_TYPE__": 'SNAPSHOT_TAKEN',
+                    "__MSG__": coordinator_info
+                },
+                Serializer.MSGPACK)
+            sync_socket_to_coordinator = zmq.Context().socket(zmq.DEALER)
+            sync_socket_to_coordinator.connect(f'tcp://{DISCOVERY_HOST}:{DISCOVERY_PORT}')
+            sync_socket_to_coordinator.send(msg)
+            sync_socket_to_coordinator.close()
+        return True
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
-    async def take_snapshot(self, operator, cic_clock=0, cor_round=-1):
+    async def take_snapshot(self, pool: concurrent.futures.ProcessPoolExecutor, operator, cic_clock=0, cor_round=-1):
         if isinstance(self.local_state, InMemoryOperatorState):
             snapshot_start = time.time_ns() // 1000000
             self.local_state: InMemoryOperatorState
             async with self.snapshot_state_lock:
-                timestamp_one = time.time_ns() // 1000000
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
                 last_messages_sent = await self.networking.flush_kafka_buffer(operator)
-                timestamp_two = time.time_ns() // 1000000
                 snapshot_data = {}
                 match self.checkpoint_protocol:
                     case 'UNC':
-                        snapshot_data = await self.checkpointing.get_snapshot_data(operator, last_messages_sent)
+                        snapshot_data = self.checkpointing.get_snapshot_data(operator, last_messages_sent)
                     case 'CIC':
-                        snapshot_data = await self.checkpointing.get_snapshot_data(operator, last_messages_sent)
+                        snapshot_data = self.checkpointing.get_snapshot_data(operator, last_messages_sent)
                         snapshot_data['cic_clock'] = cic_clock
                     case 'COR':
-                        snapshot_data = await self.checkpointing.get_snapshot_data(operator)
+                        snapshot_data = self.checkpointing.get_snapshot_data(operator)
                     case _:
                         logging.warning('Unknown protocol, no snapshot data added.')
                 snapshot_data['local_state_data'] = self.local_state.data[operator]
-                # logging.warning(f'Local state data for {operator}: {self.local_state.data[operator]}')
-                timestamp_three = time.time_ns() // 1000000
-                bytes_file: bytes = compressed_cloudpickle_serialization(snapshot_data)
-            snapshot_time = cor_round
-            if snapshot_time == -1:
-                snapshot_time = time.time_ns() // 1000000
-            snapshot_name: str = f"snapshot_{self.id}_{operator}_{snapshot_time}.bin"
-            await self.minio_client_async.put_object(
-                bucket_name=SNAPSHOT_BUCKET_NAME,
-                object_name=snapshot_name,
-                data=io.BytesIO(bytes_file),
-                length=len(bytes_file)
-            )
-            timestamp_four = time.time_ns() // 1000000
-            if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
-                coordinator_info = {}
-                coordinator_info['last_messages_processed'] = snapshot_data['last_messages_processed']
-                coordinator_info['last_messages_sent'] = last_messages_sent
-                coordinator_info['snapshot_name'] = snapshot_name
-                snapshot_duration = (time.time_ns() // 1000000) - snapshot_start
-                coordinator_info['snapshot_duration'] = snapshot_duration
-                #logging.warning(f'Snapshot done, took: {snapshot_duration}')
-                await self.networking.send_message(
-                    DISCOVERY_HOST, DISCOVERY_PORT,
-                    {
-                        "__COM_TYPE__": 'SNAPSHOT_TAKEN',
-                        "__MSG__": coordinator_info
-                    },
-                    Serializer.MSGPACK
-                )
-            timestamp_five = time.time_ns() // 1000000
-            #logging.warning(f'timestamp times for operator {operator}; flushing buffer: {timestamp_two - timestamp_one}, compressing data: {timestamp_three - timestamp_two}, writing to bucket: {timestamp_four - timestamp_three}, snapshot data: {timestamp_five - timestamp_four}')
+                snapshot_time = cor_round
+                if snapshot_time == -1:
+                    snapshot_time = time.time_ns() // 1_000_000
+                snapshot_name: str = f"snapshot_{self.id}_{operator}_{snapshot_time}.bin"
+                coordinator_info = None
+                if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
+                    snapshot_duration = (time.time_ns() // 1000000) - snapshot_start
+                    coordinator_info = {'last_messages_processed': snapshot_data['last_messages_processed'],
+                                        'last_messages_sent': last_messages_sent,
+                                        'snapshot_name': snapshot_name,
+                                        'snapshot_duration': snapshot_duration}
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(pool, self.async_snapshot,
+                                     snapshot_name, snapshot_data, self.networking.encode_message, coordinator_info)
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
@@ -196,12 +208,15 @@ class Worker:
         last_kafka_consumed = {}
         if 'last_kafka_consumed' in deserialized_data.keys():
             last_kafka_consumed = deserialized_data['last_kafka_consumed']
-        to_replay = []
+        # to_replay = []
         if self.checkpoint_protocol == 'COR':
             to_replay = await self.checkpointing.find_kafka_to_replay(operator_name, last_kafka_consumed)
         else:
-            to_replay = await self.checkpointing.restore_snapshot_data(operator_name, deserialized_data['last_messages_processed'], deserialized_data['last_messages_sent'], last_kafka_consumed)
-        for (tp, offset) in to_replay:
+            to_replay = await self.checkpointing.restore_snapshot_data(operator_name,
+                                                                       deserialized_data['last_messages_processed'],
+                                                                       deserialized_data['last_messages_sent'],
+                                                                       last_kafka_consumed)
+        for tp, offset in to_replay:
             self.kafka_consumer.seek(tp, offset)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
@@ -252,7 +267,7 @@ class Worker:
         try:
             while True:
                 result = await replay_consumer.getone()
-                if replay_until == None or replay_until >= result.offset:
+                if replay_until is None or replay_until >= result.offset:
                     await self.replay_log_message(result)
                 else:
                     break
@@ -260,7 +275,7 @@ class Worker:
             # Some unclosed AIOKafkaConnection error is triggered by replay_consumer.stop()
             # logging.warning(f'Reached finally for channel {channel}')
             await replay_consumer.stop()
-            # logging.warning(f'Stopped consumer for channel {channel}')  
+            # logging.warning(f'Stopped consumer for channel {channel}')
 
     async def replay_log_message(self, msg):
         deserialized_data: dict = self.networking.decode_message(msg.value)
@@ -320,25 +335,25 @@ class Worker:
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
 
-    async def checkpoint_coordinated_sources(self, sources, round):
+    async def checkpoint_coordinated_sources(self, pool, sources, _round):
         for source in sources:
-            #Checkpoint the source operator
+            # Checkpoint the source operator
             outgoing_channels = await self.checkpointing.get_outgoing_channels(source)
-            #Send marker on all outgoing channels
-            await self.take_snapshot(source, cor_round=round)
-            for (id, operator) in outgoing_channels:
-                self.create_task(self.send_marker(source, id, operator, round))
+            # Send marker on all outgoing channels
+            await self.take_snapshot(pool, source, cor_round=_round)
+            for _id, operator in outgoing_channels:
+                self.create_task(self.send_marker(source, _id, operator, _round))
 
-    async def send_marker(self, source, id, operator, round):
-        if id not in self.peers.keys():
+    async def send_marker(self, source, _id, operator, _round):
+        if _id not in self.peers.keys():
             logging.warning('Unknown id in network')
         else:
-            (host, port) = self.peers[id]
+            (host, port) = self.peers[_id]
             await self.networking.send_message(
                 host, port,
                 {
                     "__COM_TYPE__": 'COORDINATED_MARKER',
-                    "__MSG__": (self.id, source, operator, round)
+                    "__MSG__": (self.id, source, operator, _round)
                 },
                 Serializer.MSGPACK
             )
@@ -350,7 +365,7 @@ class Worker:
                 self.create_task(self.run_function(payload, send_from=message['__SENT_FROM__']))
             self.message_buffer[operator] = []
 
-    async def worker_controller(self, deserialized_data, resp_adr):
+    async def worker_controller(self, pool: concurrent.futures.ProcessPoolExecutor, deserialized_data, resp_adr):
         message_type: str = deserialized_data['__COM_TYPE__']
         message = deserialized_data['__MSG__']
         match message_type:
@@ -358,7 +373,11 @@ class Worker:
                 request_id = message['__RQ_ID__']
                 if message_type == 'RUN_FUN_REMOTE':
                     sender_details = message['__SENT_FROM__']
-                    if self.checkpoint_protocol == 'COR' and await self.checkpointing.check_marker_received(message['__OP_NAME__'], sender_details['sender_id'], sender_details['operator_name']):
+
+                    if self.checkpoint_protocol == 'COR' and \
+                            await self.checkpointing.check_marker_received(message['__OP_NAME__'],
+                                                                           sender_details['sender_id'],
+                                                                           sender_details['operator_name']):
                         # logging.warning('Buffering message!')
                         self.message_buffer[message['__OP_NAME__']].append(message)
                     else:
@@ -366,15 +385,16 @@ class Worker:
                         if self.checkpoint_protocol == 'CIC':
                             oper_name = message['__OP_NAME__']
                             # CHANGE TO CIC OBJECT
-                            cycle_detected, cic_clock = await self.checkpointing.cic_cycle_detection(oper_name, message['__CIC_DETAILS__'])
+                            cycle_detected, cic_clock = await self.checkpointing.cic_cycle_detection(
+                                oper_name, message['__CIC_DETAILS__'])
                             if cycle_detected:
                                 logging.warning(f'Cycle detected for operator {oper_name}! Taking forced checkpoint.')
                                 # await self.networking.update_cic_checkpoint(oper_name)
-                                await self.take_snapshot(message['__OP_NAME__'], cic_clock=cic_clock)
+                                await self.take_snapshot(pool, message['__OP_NAME__'], cic_clock=cic_clock)
                         payload = self.unpack_run_payload(message, request_id)
                         self.create_task(
                             self.run_function(
-                                payload, send_from = sender_details
+                                payload, send_from=sender_details
                             )
                         )
                 else:
@@ -400,13 +420,14 @@ class Worker:
                 if self.checkpoint_protocol == 'COR':
                     sources = await self.checkpointing.get_source_operators()
                     if len(sources) == 0:
-                        logging.warning('No source operators, nothing to checkpoint. Check if operator tree is supplied in generator.')
+                        logging.warning('No source operators, nothing to checkpoint.'
+                                        ' Check if operator tree is supplied in generator.')
                     else:
-                        await self.checkpoint_coordinated_sources(sources, message)
+                        await self.checkpoint_coordinated_sources(pool, sources, message)
             case 'COORDINATED_MARKER':
                 all_markers_received = await self.checkpointing.marker_received(message)
                 if all_markers_received:
-                    await self.checkpoint_coordinated_sources([message[2]], message[3])
+                    await self.checkpoint_coordinated_sources(pool, [message[2]], message[3])
                     await self.process_message_buffer(message[2])
                     checkpointing_done = await self.checkpointing.set_sink_operator(message[2])
                     if checkpointing_done:
@@ -470,12 +491,11 @@ class Worker:
                                 )
                     case _:
                         logging.warning('Snapshot restore message received for unknown protocol, no restoration.')
-            case 'RECEIVE_EXE_PLN':  # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
+            # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
+            case 'RECEIVE_EXE_PLN':
                 # This contains all the operators of a job assigned to this worker
-
                 # Message that tells the worker its execution plan from round_robin.schedule
-
-                await self.handle_execution_plan(message)
+                await self.handle_execution_plan(pool, message)
                 self.attach_state_to_operators()
             # ADD CASE FOR TESTING SNAPSHOT RESTORE
             case _:
@@ -505,8 +525,10 @@ class Worker:
                         self.offsets_per_second[operator][part] = []
                     self.offsets_per_second[operator][part].append(offsets[operator][part])
 
-    async def handle_execution_plan(self, message):
-        worker_operators, self.dns, self.peers, self.operator_state_backend, self.total_partitions_per_operator, partitions_to_ids = message
+
+    async def handle_execution_plan(self, pool, message):
+        worker_operators, self.dns, self.peers,\
+            self.operator_state_backend, self.total_partitions_per_operator, partitions_to_ids = message
         self.networking.set_id(self.id)
         self.waiting_for_exe_graph = False
         match self.checkpoint_protocol:
@@ -538,12 +560,12 @@ class Worker:
                     await self.checkpointing.update_cic_checkpoint(operator)
                 del self.peers[self.id]
                 # START CHECKPOINTING DEPENDING ON PROTOCOL
-                self.create_task(self.communication_induced_checkpointing(self.checkpoint_interval))
+                self.create_task(self.communication_induced_checkpointing(pool, self.checkpoint_interval))
                 # CHANGE TO CIC OBJECT
                 await self.checkpointing.set_peers(self.peers)
             case 'UNC':
                 del self.peers[self.id]
-                self.create_task(self.uncoordinated_checkpointing(self.checkpoint_interval))
+                self.create_task(self.uncoordinated_checkpointing(pool, self.checkpoint_interval))
             case 'COR':
                 await self.checkpointing.set_peers(self.peers)
                 await self.checkpointing.process_channel_list(self.channel_list, worker_operators, partitions_to_ids)
@@ -566,20 +588,20 @@ class Worker:
 
     # CHECKPOINTING PROTOCOLS:
 
-    async def uncoordinated_checkpointing(self, checkpoint_interval):
+    async def uncoordinated_checkpointing(self, pool, checkpoint_interval):
         while True:
             interval_randomness = random.randint(checkpoint_interval - 1, checkpoint_interval + 1)
             await asyncio.sleep(interval_randomness)
             for operator in self.total_partitions_per_operator.keys():
-                await self.take_snapshot(operator)
+                await self.take_snapshot(pool, operator)
 
-    async def communication_induced_checkpointing(self, checkpoint_interval):
+    async def communication_induced_checkpointing(self, pool, checkpoint_interval):
         while self.waiting_for_exe_graph:
             await asyncio.sleep(0.1)
         for operator in self.total_partitions_per_operator.keys():
-            self.create_task(self.cic_per_operator(checkpoint_interval, operator))
+            self.create_task(self.cic_per_operator(pool, checkpoint_interval, operator))
 
-    async def cic_per_operator(self, checkpoint_interval, operator):
+    async def cic_per_operator(self, pool, checkpoint_interval, operator):
         while True:
             interval_randomness = random.randint(checkpoint_interval-1, checkpoint_interval+1)
             current_time = time.time_ns() // 1000000
@@ -587,10 +609,12 @@ class Worker:
             if current_time > last_snapshot_timestamp + (interval_randomness*1000):
                 await self.checkpointing.update_cic_checkpoint(operator)
                 cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
-                await self.take_snapshot(operator, cic_clock=cic_clock)
+                await self.take_snapshot(pool, operator, cic_clock=cic_clock)
                 await asyncio.sleep(interval_randomness)
             else:
-                await asyncio.sleep(ceil(((last_snapshot_timestamp + (interval_randomness*1000)) - current_time) / 1000))
+                await asyncio.sleep(
+                    ceil(((last_snapshot_timestamp + (checkpoint_interval*1000)) - current_time) / 1000)
+                )
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
@@ -600,15 +624,18 @@ class Worker:
             f"Worker TCP Server listening at 0.0.0.0:{SERVER_PORT} "
             f"IP:{self.networking.host_name}"
         )
-        while True:
-            # This is where we read from TCP, log at receiver
-            resp_adr, data = await self.router.read()
-            deserialized_data: dict = self.networking.decode_message(data)
-            if '__COM_TYPE__' not in deserialized_data:
-                logging.error(f"Deserialized data do not contain a message type")
-            else:
-                await self.worker_controller(deserialized_data, resp_adr)
-        await self.kafka_egress_producer_pool.close()
+        with concurrent.futures.ProcessPoolExecutor(1) as pool:
+            try:
+                while True:
+                    # This is where we read from TCP, log at receiver
+                    resp_adr, data = await self.router.read()
+                    deserialized_data: dict = self.networking.decode_message(data)
+                    if '__COM_TYPE__' not in deserialized_data:
+                        logging.error("Deserialized data do not contain a message type")
+                    else:
+                        await self.worker_controller(pool, deserialized_data, resp_adr)
+            finally:
+                await self.kafka_egress_producer_pool.close()
 
     @staticmethod
     def unpack_run_payload(

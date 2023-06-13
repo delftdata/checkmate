@@ -75,9 +75,6 @@ for idx, t in enumerate(joined_sorted['timestamp_x']):
 latency_buckets_99: dict[int, float] = {k*100: np.percentile(v['items'], 99) for k, v in latency_buckets.items() if v['items'] != []}
 latency_buckets_50: dict[int, float] = {k*100: np.percentile(v['items'], 50) for k, v in latency_buckets.items() if v['items'] != []}
 
-# print(latency_buckets_99)
-# print(latency_buckets_50)
-
 _, ax = plt.subplots()
 ax.plot(latency_buckets_99.keys(), latency_buckets_99.values(), linewidth=2.5, label='99p')
 ax.plot(latency_buckets_50.keys(), latency_buckets_50.values(), linewidth=2.5, label='50p')
