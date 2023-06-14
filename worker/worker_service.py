@@ -90,7 +90,6 @@ class Worker(object):
             send_from=None
     ) -> bool:
         # logging.warning(f"run_function -> snapshot_event: {self.snapshot_event.is_set()}")
-        await self.snapshot_event.wait()
         success: bool = True
         operator_partition = self.registered_operators[(payload.operator_name, payload.partition)]
         response = await operator_partition.run_function(
@@ -277,6 +276,7 @@ class Worker(object):
             break
         try:
             while True:
+                await self.snapshot_event.wait()
                 result = await replay_consumer.getone()
                 if replay_until is None or replay_until >= result.offset:
                     await self.replay_log_message(result)
