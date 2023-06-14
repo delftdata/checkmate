@@ -39,7 +39,7 @@ async def main():
     await universalis.send_channel_list(channel_list)
 
 
-    time.sleep(1)
+    time.sleep(30)
     input("Press when you want to start producing.")
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
@@ -48,10 +48,11 @@ async def main():
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",
-               "--rate", "100",
+               "--rate", "11000",
                "--max-noise", "0",
-               "--iteration-duration-ms", "60000",
-               "--kafka-server", "localhost:9093"
+               "--iteration-duration-ms", "90000",
+               "--kafka-server", "localhost:9093",
+               "--uni-bids-partitions", "10"
                ])
 
     await universalis.close()

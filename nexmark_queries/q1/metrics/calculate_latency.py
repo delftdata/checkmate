@@ -1,17 +1,22 @@
+import sys
 import pandas as pd
 import numpy as np
 import math
 import matplotlib.pyplot as plt
 
 
-input_msgs = pd.read_csv('./results/q1/input.csv')
-output_msgs = pd.read_csv('./results/q1/output.csv')
+protocol = sys.argv[1]
+
+input_msgs = pd.read_csv(f'./results/q1/{protocol}-input.csv')
+output_msgs = pd.read_csv(f'./results/q1/{protocol}-output.csv')
 experiment_length= 60 # in seconds
 
 joined = pd.merge(input_msgs, output_msgs, on='request_id', how='outer')
-runtime = joined['timestamp_y'] - joined['timestamp_x']
+# runtime = joined['timestamp_y'] - joined['timestamp_x']
 
 joined_sorted = joined.sort_values('timestamp_x').reset_index()
+joined_sorted = joined_sorted[joined_sorted['timestamp_x'] > (30000 + joined_sorted['timestamp_x'][0])].reset_index()
+runtime = joined_sorted['timestamp_y'] - joined_sorted['timestamp_x']
 
 runtime_no_nan = runtime.dropna()
 print(f'min latency: {min(runtime_no_nan)}ms')
@@ -62,16 +67,6 @@ for idx, t in enumerate(joined_sorted['timestamp_x']):
             latency_buckets[i]['items'].append(joined_sorted['timestamp_y'][idx] - joined_sorted['timestamp_x'][idx])
             break
 
-# for idx, t in enumerate(joined_sorted['timestamp_x']):
-#     if t - start_time > granularity:
-#         bucket_id += 1
-#         start_time = t
-#         latency_buckets[bucket_id] = [joined_sorted['timestamp_y'][idx] - joined_sorted['timestamp_x'][idx]]
-#     else:
-#         latency_buckets[bucket_id].append(joined_sorted['timestamp_y'][idx] - joined_sorted['timestamp_x'][idx])
-
-# print(latency_buckets)
-
 latency_buckets_99: dict[int, float] = {k*100: np.percentile(v['items'], 99) for k, v in latency_buckets.items() if v['items'] != []}
 latency_buckets_50: dict[int, float] = {k*100: np.percentile(v['items'], 50) for k, v in latency_buckets.items() if v['items'] != []}
 
@@ -84,6 +79,6 @@ handles, labels = plt.gca().get_legend_handles_labels()
 order = [1,0]
 
 ax.legend([handles[idx] for idx in order],[labels[idx] for idx in order],bbox_to_anchor=(0.5, -0.2), loc="center", ncol=2)
-ax.set_title("NexMark Q1 - Uncoordinated")
+ax.set_title(f"NexMark Q1 - {protocol}")
 plt.tight_layout()
 plt.show()
