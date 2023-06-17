@@ -21,6 +21,7 @@ from universalis.common.operator import Operator
 from universalis.common.serialization import Serializer, compressed_cloudpickle_deserialization, compressed_cloudpickle_serialization, msgpack_serialization
 
 from worker.kafka_producer_pool import KafkaProducerPool
+from worker.kafka_consumer_pool import KafkaConsumerPool
 from worker.operator_state.in_memory_state import InMemoryOperatorState
 from worker.operator_state.redis_state import RedisOperatorState
 from worker.operator_state.stateless import Stateless
@@ -55,6 +56,7 @@ class Worker(object):
         self.networking = NetworkingManager()
         self.router = None
         self.kafka_egress_producer_pool = None
+        self.kafka_ingress_consumer_pool = None
         self.operator_state_backend = None
         self.registered_operators: dict[tuple[str, int], Operator] = {}
         self.dns: dict[str, dict[str, tuple[str, int]]] = {}
@@ -230,31 +232,12 @@ class Worker(object):
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
     async def start_kafka_consumer(self, topic_partitions: list[TopicPartition]):
-        logging.info(f'Creating Kafka consumer for topic partitions: {topic_partitions}')
-        self.kafka_consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
-        self.kafka_consumer.assign(topic_partitions)
-        while True:
-            # start the kafka consumer
-            try:
-                await self.kafka_consumer.start()
-            except (UnknownTopicOrPartitionError, KafkaConnectionError):
-                time.sleep(1)
-                logging.warning(f'Kafka at {KAFKA_URL} not ready yet, sleeping for 1 second')
-                continue
-            break
-        try:
-            # Consume messages
-            while True:
-                await self.snapshot_event.wait()
-                result = await self.kafka_consumer.getmany(timeout_ms=1)
-                for _, messages in result.items():
-                    if messages:
-                        # logging.warning('Processing kafka messages')
-                        for message in messages:
-                            self.handle_message_from_kafka(message)
-        finally:
-            await self.kafka_consumer.stop()
-            await self.networking.stop_kafka_producer()
+        logging.info(f'Creating Kafka consumer per topic partitions: {topic_partitions}')
+        self.kafka_ingress_consumer_pool = KafkaConsumerPool(self.id, KAFKA_URL, topic_partitions)
+        await self.kafka_ingress_consumer_pool.start()
+        for consumer in self.kafka_ingress_consumer_pool.consumer_pool:
+            self.create_task(self.consumer_read(consumer))
+
 
     async def replay_from_kafka(self, operator_name, channel, offset):
         replay_until = await self.checkpointing.find_last_sent_offset(operator_name, channel)
@@ -305,6 +288,16 @@ class Worker(object):
                 },
                 Serializer.MSGPACK
             )
+
+    async def consumer_read(self, consumer: AIOKafkaConsumer):
+        while True:
+            await self.snapshot_event.wait()
+            result = await consumer.getmany(timeout_ms=1)
+            for _, messages in result.items():
+                if messages:
+                    # logging.warning('Processing kafka messages')
+                    for message in messages:
+                        self.handle_message_from_kafka(message)
 
     def handle_message_from_kafka(self, msg):
         logging.info(
@@ -680,6 +673,7 @@ class Worker(object):
     async def main(self):
         await self.register_to_coordinator()
         await self.start_tcp_service()
+        self.kafka_ingress_consumer_pool.close()
 
 
 if __name__ == "__main__":

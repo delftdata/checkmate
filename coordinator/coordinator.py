@@ -59,7 +59,6 @@ class Coordinator:
         topics = []
         for operator in stateflow_graph.nodes.values():
             partitions_per_operator[operator.name] = operator.n_partitions
-            logging.warning(f"operator name: {operator.name}, partitions: {operator.n_partitions}")
             topics.append(NewTopic(name=operator.name, num_partitions=operator.n_partitions, replication_factor=1))
         
         # i*(j+1) + j
