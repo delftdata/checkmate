@@ -279,6 +279,14 @@ class Worker(object):
 
     async def simple_failure(self):
         await asyncio.sleep(40)
+        self.snapshot_event.clear()
+        for t in self.function_tasks:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        logging.warning("All function are canceled.")
         if self.id == 1:
             await self.networking.send_message(
                 DISCOVERY_HOST, DISCOVERY_PORT,
@@ -288,6 +296,7 @@ class Worker(object):
                 },
                 Serializer.MSGPACK
             )
+        
 
     async def consumer_read(self, consumer: AIOKafkaConsumer):
         while True:
@@ -451,6 +460,8 @@ class Worker(object):
                         )
             case 'RECOVER_FROM_SNAPSHOT':
                 logging.warning(f'Recovery message received.')
+                self.snapshot_event.clear()
+                asyncio.gather(*self.function_tasks)
                 match self.checkpoint_protocol:
                     case 'CIC' | 'UNC':
                         for op_name in message.keys():
@@ -501,6 +512,8 @@ class Worker(object):
                                 )
                     case _:
                         logging.warning('Snapshot restore message received for unknown protocol, no restoration.')
+                self.snapshot_event.set()
+    
             # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
             case 'RECEIVE_EXE_PLN':
                 # This contains all the operators of a job assigned to this worker
