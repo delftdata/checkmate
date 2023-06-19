@@ -11,6 +11,8 @@ from aiozmq import create_zmq_stream, ZmqStream
 from aiokafka import AIOKafkaProducer
 from kafka.errors import KafkaConnectionError
 
+from universalis.common.kafka_producer_pool import KafkaProducerPool
+
 from .logging import logging
 from .serialization import Serializer, msgpack_serialization, msgpack_deserialization, \
     cloudpickle_serialization, cloudpickle_deserialization
@@ -61,6 +63,7 @@ class NetworkingManager:
     def __init__(self):
         self.pools: dict[tuple[str, int], SocketPool] = {}  # HERE BETTER TO ADD A CONNECTION POOL
         self.get_socket_lock = asyncio.Lock()
+        self.get_last_message_lock = asyncio.Lock()
         self.host_name: str = str(socket.gethostbyname(socket.gethostname()))
         self.last_messages_sent = {}
         self.total_partitions_per_operator = {}
@@ -74,6 +77,9 @@ class NetworkingManager:
 
         self.checkpointing = None
         self.checkpoint_protocol = None
+
+        self.kafka_logging_producer_pool = KafkaProducerPool(self.id, KAFKA_URL, size=100)
+        self.message_logging = set()
 
     def set_id(self, id):
         self.id = id
@@ -113,10 +119,23 @@ class NetworkingManager:
             break
         logging.info(f'KAFKA PRODUCER STARTED FOR NETWORKING')
 
+    async def start_kafka_logging_producer_pool(self):
+        await self.kafka_logging_producer_pool.start()  
+
     async def flush_kafka_buffer(self, operator):
+        await self.kafka_producer.flush()
         last_msg_sent = self.last_messages_sent[operator]
         self.last_messages_sent[operator] = {}
-        await self.kafka_producer.flush()
+        return last_msg_sent
+    
+    async def flush_kafka_producer_pool(self, operator):
+        kafka_flushes = [kafka_producer.flush() for kafka_producer in self.kafka_logging_producer_pool.producer_pool]
+        asyncio.gather(*kafka_flushes)
+        kafka_flushes = []
+        asyncio.gather(*self.message_logging)
+        self.message_logging = set()
+        last_msg_sent = self.last_messages_sent[operator]
+        self.last_messages_sent[operator] = {}
         return last_msg_sent
 
     async def stop_kafka_producer(self):
@@ -140,6 +159,19 @@ class NetworkingManager:
             self.pools[(host, port)].close()
         else:
             logging.warning('The socket that you are trying to close does not exist')
+
+    async def log_message(self, msg, send_part, send_name, rec_part, rec_name, serializer: Serializer = Serializer.CLOUDPICKLE):
+        logging_partition=send_part*(self.total_partitions_per_operator[rec_name]) + rec_part
+        kafka_data = await self.kafka_logging_producer_pool.pick_producer(logging_partition).send_and_wait(send_name+rec_name,
+                                                value=self.encode_message(msg, serializer),
+                                                partition=logging_partition)
+        channel_key = send_name+'_'+rec_name+'_'+str(logging_partition)
+        async with self.get_last_message_lock:
+            if ~(channel_key in self.last_messages_sent[send_name]): 
+                self.last_messages_sent[send_name][channel_key] = kafka_data.offset
+            elif kafka_data.offset > self.last_messages_sent[send_name][channel_key]:
+                self.last_messages_sent[send_name][channel_key] = kafka_data.offset
+        return kafka_data.offset
 
     async def send_message(self,
                            host,
@@ -172,11 +204,11 @@ class NetworkingManager:
                     self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
                 receiving_name = msg['__MSG__']['__OP_NAME__']
                 receiving_partition = msg['__MSG__']['__PARTITION__']
-                kafka_data = await self.kafka_producer.send_and_wait(sending_name+receiving_name,
-                                                        value=self.encode_message(msg, serializer),
-                                                        partition=sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)
-                msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_data.offset
-                self.last_messages_sent[sending_name][sending_name+'_'+receiving_name+'_'+str(sending_partition*(self.total_partitions_per_operator[receiving_name]) + receiving_partition)] = kafka_data.offset
+            task = asyncio.create_task(self.log_message(msg, sending_partition, sending_name, receiving_partition, receiving_name))
+            self.message_logging.add(task)
+            task.add_done_callback(self.message_logging.discard)
+            await task
+            msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = task.result()
         new_msg = self.encode_message(msg, serializer)
         self.total_network_size += sys.getsizeof(new_msg)
         if msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':

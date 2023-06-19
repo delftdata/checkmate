@@ -23,7 +23,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = ''
+CHECKPOINT_PROTOCOL: str = 'UNC'
 
 CHECKPOINT_INTERVAL: int = 5
 
@@ -332,7 +332,7 @@ class CoordinatorService:
 
     async def get_metrics(self):
         while(True):
-            await asyncio.sleep(120)
+            await asyncio.sleep(180)
             logging.warning('GETTING METRICS!')
             offsets_per_second = {}
             total_network_size = 0
@@ -378,7 +378,7 @@ class CoordinatorService:
             logging.warning("Unable to create minio bucket")
 
     async def main(self):
-        # self.create_task(self.get_metrics())
+        self.create_task(self.get_metrics())
         router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")  # coordinator
         logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT}")
         # ADD DIFFERENT LOGIC FOR TESTING STATE RECOVERY

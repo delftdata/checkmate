@@ -22,6 +22,9 @@ class KafkaProducerPool(object):
         self.index = 0 if next_idx == self.size else next_idx
         return conn
     
+    def pick_producer(self, partition):
+        return self.producer_pool[partition]
+    
     async def start(self):
         for _ in range(self.size):
             self.producer_pool.append(await self.start_kafka_egress_producer())

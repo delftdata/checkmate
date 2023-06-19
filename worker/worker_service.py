@@ -19,9 +19,9 @@ from universalis.common.logging import logging
 from universalis.common.networking import NetworkingManager
 from universalis.common.operator import Operator
 from universalis.common.serialization import Serializer, compressed_cloudpickle_deserialization, compressed_cloudpickle_serialization, msgpack_serialization
+from universalis.common.kafka_producer_pool import KafkaProducerPool
+from universalis.common.kafka_consumer_pool import KafkaConsumerPool
 
-from worker.kafka_producer_pool import KafkaProducerPool
-from worker.kafka_consumer_pool import KafkaConsumerPool
 from worker.operator_state.in_memory_state import InMemoryOperatorState
 from worker.operator_state.redis_state import RedisOperatorState
 from worker.operator_state.stateless import Stateless
@@ -177,7 +177,7 @@ class Worker(object):
                 await asyncio.gather(*self.function_tasks)
                 self.function_tasks = set()
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
-                last_messages_sent = await self.networking.flush_kafka_buffer(operator)
+                last_messages_sent = await self.networking.flush_kafka_producer_pool(operator)
                 snapshot_data = {}
                 match self.checkpoint_protocol:
                     case 'UNC':
@@ -588,7 +588,7 @@ class Worker(object):
             self.registered_operators[(operator.name, partition)] = operator
             if INGRESS_TYPE == 'KAFKA':
                 self.topic_partitions.append(TopicPartition(operator.name, partition))
-        await self.networking.start_kafka_producer()
+        await self.networking.start_kafka_logging_producer_pool()
         self.create_task(self.start_kafka_consumer(self.topic_partitions))
         logging.info(
             f'Registered operators: {self.registered_operators} \n'
