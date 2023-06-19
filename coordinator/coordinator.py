@@ -62,7 +62,7 @@ class Coordinator:
             topics.append(NewTopic(name=operator.name, num_partitions=operator.n_partitions, replication_factor=1))
         
         # i*(j+1) + j
-        if protocol in ["CIC, UNC"]:
+        if protocol in ["CIC", "UNC"]:
             for key_one in partitions_per_operator.keys():
                 for key_two in partitions_per_operator.keys():
                     if key_one is not key_two:
