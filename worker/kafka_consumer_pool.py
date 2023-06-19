@@ -33,8 +33,7 @@ class KafkaConsumerPool(object):
 
     async def start_kafka_ingress_consumer(self, partition):
         kafka_ingress_consumer = AIOKafkaConsumer(
-            bootstrap_servers=[self.kafka_url],
-            group_id="ingress_consumers"
+            bootstrap_servers=[self.kafka_url]
         )
         kafka_ingress_consumer.assign([partition])
         while True:
