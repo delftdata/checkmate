@@ -2,7 +2,7 @@ from universalis.common.operator import StatefulFunction, Operator
 from universalis.common.logging import logging
 from universalis.nexmark.entities import Bid
 
-currency_mapper_operator = Operator('currencyMapper', n_partitions=30)
+currency_mapper_operator = Operator('currencyMapper', n_partitions=10)
 
 @currency_mapper_operator.register
 async def dollarToEuro(ctx: StatefulFunction, bid: Bid):

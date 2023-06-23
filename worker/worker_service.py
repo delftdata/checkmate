@@ -82,6 +82,9 @@ class Worker(object):
         # Coordinated variables
         self.notified_coordinator = False
         self.message_buffer = {}
+        # failure
+        self.no_failure_event = asyncio.Event()
+        self.no_failure_event.set()
 
         self.offsets_per_second = {}
         self.kafka_consumer: AIOKafkaConsumer = ...
@@ -170,6 +173,7 @@ class Worker(object):
     # if you want to use this run it with self.create_task(self.take_snapshot())
     async def take_snapshot(self, pool: concurrent.futures.ProcessPoolExecutor, operator, cic_clock=0, cor_round=-1):
         if isinstance(self.local_state, InMemoryOperatorState):
+            await self.no_failure_event.wait()
             snapshot_start = time.time_ns() // 1000000
             self.local_state: InMemoryOperatorState
             self.snapshot_event.clear()
@@ -228,14 +232,14 @@ class Worker(object):
                                                                        deserialized_data['last_messages_sent'],
                                                                        last_kafka_consumed)
         for tp, offset in to_replay:
-            self.kafka_consumer.seek(tp, offset)
+            self.kafka_ingress_consumer_pool.consumer_pool[tp].seek(tp, offset)
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
     async def start_kafka_consumer(self, topic_partitions: list[TopicPartition]):
         logging.info(f'Creating Kafka consumer per topic partitions: {topic_partitions}')
         self.kafka_ingress_consumer_pool = KafkaConsumerPool(self.id, KAFKA_URL, topic_partitions)
         await self.kafka_ingress_consumer_pool.start()
-        for consumer in self.kafka_ingress_consumer_pool.consumer_pool:
+        for consumer in self.kafka_ingress_consumer_pool.consumer_pool.values():
             self.create_task(self.consumer_read(consumer))
 
 
@@ -259,8 +263,8 @@ class Worker(object):
             break
         try:
             while True:
-                await self.snapshot_event.wait()
                 result = await replay_consumer.getone()
+                # logging.warning(f"replay_until: {replay_until}, offset: {result.offset}")
                 if replay_until is None or replay_until >= result.offset:
                     await self.replay_log_message(result)
                 else:
@@ -275,27 +279,29 @@ class Worker(object):
         deserialized_data: dict = self.networking.decode_message(msg.value)
         # logging.warning(f'replaying msg: {deserialized_data}')
         receiver_info = deserialized_data['__MSG__']['__SENT_TO__']
+        deserialized_data['__MSG__']['__SENT_FROM__']['kafka_offset'] = msg.offset
         await self.networking.replay_message(receiver_info['host'], receiver_info['port'], deserialized_data)
 
     async def simple_failure(self):
-        await asyncio.sleep(40)
+        await asyncio.sleep(20)
         self.snapshot_event.clear()
-        for t in self.function_tasks:
+        self.no_failure_event.clear()
+        while self.function_tasks:
+            t = self.function_tasks.pop()
             t.cancel()
             try:
                 await t
             except asyncio.CancelledError:
-                pass
+                pass            
         logging.warning("All function are canceled.")
-        if self.id == 1:
-            await self.networking.send_message(
-                DISCOVERY_HOST, DISCOVERY_PORT,
-                {
-                    "__COM_TYPE__": 'WORKER_FAILED',
-                    "__MSG__": self.id
-                },
-                Serializer.MSGPACK
-            )
+        await self.networking.send_message(
+            DISCOVERY_HOST, DISCOVERY_PORT,
+            {
+                "__COM_TYPE__": 'WORKER_FAILED',
+                "__MSG__": self.id
+            },
+            Serializer.MSGPACK
+        )
         
 
     async def consumer_read(self, consumer: AIOKafkaConsumer):
@@ -325,6 +331,12 @@ class Worker(object):
             if not self.notified_coordinator and self.checkpoint_protocol == 'COR':
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
+                if self.id == 1:
+                    self.create_task(self.simple_failure())
+            if not self.notified_coordinator:
+                self.notified_coordinator = True
+                if self.id == 1:
+                    self.create_task(self.simple_failure())
             self.create_run_function_task(
                 self.run_function(
                     run_func_payload
@@ -449,7 +461,7 @@ class Worker(object):
                     await self.checkpoint_coordinated_sources(pool, [message[2]], message[3])
                     await self.process_message_buffer(message[2])
                     checkpointing_done = await self.checkpointing.set_sink_operator(message[2])
-                    if checkpointing_done:
+                    if checkpointing_done and self.no_failure_event.is_set():
                         await self.networking.send_message(
                             DISCOVERY_HOST, DISCOVERY_PORT,
                             {
@@ -460,6 +472,7 @@ class Worker(object):
                         )
             case 'RECOVER_FROM_SNAPSHOT':
                 logging.warning(f'Recovery message received.')
+                self.no_failure_event.clear()
                 self.snapshot_event.clear()
                 asyncio.gather(*self.function_tasks)
                 match self.checkpoint_protocol:
@@ -513,6 +526,7 @@ class Worker(object):
                     case _:
                         logging.warning('Snapshot restore message received for unknown protocol, no restoration.')
                 self.snapshot_event.set()
+                self.no_failure_event.set()
     
             # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
             case 'RECEIVE_EXE_PLN':
@@ -573,7 +587,6 @@ class Worker(object):
         self.networking.set_checkpointing(self.checkpointing)
 
         # self.create_task(self.send_throughputs())
-        # self.create_task(self.simple_failure())
 
         match self.checkpoint_protocol:
             case 'CIC':
@@ -615,8 +628,9 @@ class Worker(object):
         while True:
             interval_randomness = random.randint(checkpoint_interval - 1, checkpoint_interval + 1)
             await asyncio.sleep(interval_randomness)
-            for operator in self.total_partitions_per_operator.keys():
-                await self.take_snapshot(pool, operator)
+            if self.no_failure_event.is_set():
+                for operator in self.total_partitions_per_operator.keys():
+                    await self.take_snapshot(pool, operator)
 
     async def communication_induced_checkpointing(self, pool, checkpoint_interval):
         while self.waiting_for_exe_graph:

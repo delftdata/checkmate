@@ -81,4 +81,5 @@ order = [1,0]
 ax.legend([handles[idx] for idx in order],[labels[idx] for idx in order],bbox_to_anchor=(0.5, -0.2), loc="center", ncol=2)
 ax.set_title(f"NexMark Q1 - {protocol}")
 plt.tight_layout()
-plt.show()
+# plt.show()
+plt.savefig(f'results/q1/figures/{protocol}')

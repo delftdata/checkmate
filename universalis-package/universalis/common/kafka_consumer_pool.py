@@ -10,7 +10,8 @@ class KafkaConsumerPool(object):
         self.worker_id = worker_id
         self.kafka_url = kafka_url
         self.topic_partitions = topic_partitions
-        self.consumer_pool: list[AIOKafkaConsumer] = []
+        self.size = len(topic_partitions)
+        self.consumer_pool: dict[TopicPartition,AIOKafkaConsumer] = {}
         self.index = 0
     
     def __iter__(self):
@@ -24,7 +25,7 @@ class KafkaConsumerPool(object):
     
     async def start(self):
         for partition in self.topic_partitions:
-            self.consumer_pool.append(await self.start_kafka_ingress_consumer(partition))
+            self.consumer_pool[partition] = await self.start_kafka_ingress_consumer(partition)
     
     async def close(self):
         for consumer in self.consumer_pool:

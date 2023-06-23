@@ -38,7 +38,8 @@ class KafkaProducerPool(object):
         kafka_egress_producer = AIOKafkaProducer(
             bootstrap_servers=[self.kafka_url],
             client_id=str(self.worker_id),
-            enable_idempotence=True
+            enable_idempotence=True,
+            max_batch_size=10*16384
         )
         while True:
             try:

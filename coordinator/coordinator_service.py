@@ -23,7 +23,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'UNC'
+CHECKPOINT_PROTOCOL: str = 'CIC'
 
 CHECKPOINT_INTERVAL: int = 5
 
@@ -49,6 +49,11 @@ class CoordinatorService:
         self.recovery_graph = {}
         self.snapshot_timestamps = {}
         self.messages_to_replay = {}
+
+        self.can_checkpoint = asyncio.Event()
+        self.can_checkpoint.set()
+        self.checkpointing_in_progress = asyncio.Event()
+        self.checkpointing_in_progress.clear()
 
         #Coordinated approach
         self.checkpoint_round = -1
@@ -285,6 +290,7 @@ class CoordinatorService:
     async def process_snapshot_information(self, message):
         self.amount_of_checkpoints += 1
         self.total_checkpointing_time += message['snapshot_duration']
+        # logging.warning(message)
         snapshot_name = message['snapshot_name'].replace('.bin', '').split('_')
         # Store the snapshot timestamp in a sorted list
         bisect.insort(self.snapshot_timestamps[snapshot_name[1]][snapshot_name[2]], int(snapshot_name[3]))
@@ -313,9 +319,11 @@ class CoordinatorService:
 
     async def coordinated_checkpointing(self, checkpointing_interval):
         while True:
+            await self.can_checkpoint.wait()
             await asyncio.sleep(checkpointing_interval)
             if self.checkpoint_round == self.last_confirmed_checkpoint_round:
                 self.checkpoint_round = self.checkpoint_round + 1
+                self.checkpointing_in_progress.set()
                 await self.start_coordinated_checkpoint()
 
     async def start_coordinated_checkpoint(self):
@@ -442,6 +450,7 @@ class CoordinatorService:
                     case 'STARTED_PROCESSING':
                         self.started_processing[message] = True
                         start_checkpointing = True
+                        logging.warning 
                         for id in self.started_processing.keys():
                             start_checkpointing = start_checkpointing and self.started_processing[id]
                         if start_checkpointing:
@@ -456,6 +465,10 @@ class CoordinatorService:
                             self.total_recovery_time += ((time.time_ns() // 1000000) - self.failure_time)
                             for id in self.recovery_done.keys():
                                 self.recovery_done[id] = False
+                            for id in self.done_checkpointing.keys():
+                                self.done_checkpointing[id] = False
+                            self.checkpointing_in_progress.clear()
+                            self.can_checkpoint.set()                       
                     case 'COORDINATED_ROUND_DONE':
                         self.done_checkpointing[message[0]] = True
                         all_workers_done = True
@@ -467,9 +480,17 @@ class CoordinatorService:
                                 self.done_checkpointing[id] = False
                             self.last_confirmed_checkpoint_round = message[1]
                             logging.warning(f'Checkpointing round {message[1]} done')
+                            self.checkpointing_in_progress.clear()
                     case 'SNAPSHOT_TAKEN':
                         await self.process_snapshot_information(message)
                     case 'WORKER_FAILED':
+                        self.can_checkpoint.clear()
+                        # if we are in a checkpointing phase we need to reset everything.
+                        if self.checkpointing_in_progress.is_set():
+                            self.checkpoint_round -= 1
+                            for id in self.done_checkpointing.keys():
+                                self.done_checkpointing[id] = False
+                            self.checkpointing_in_progress.clear()
                         self.failure_time = time.time_ns() // 1000000
                         self.amount_of_failures += 1
                         if CHECKPOINT_PROTOCOL == 'COR':

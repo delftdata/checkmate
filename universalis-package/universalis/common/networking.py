@@ -167,7 +167,7 @@ class NetworkingManager:
                                                 partition=logging_partition)
         channel_key = send_name+'_'+rec_name+'_'+str(logging_partition)
         async with self.get_last_message_lock:
-            if ~(channel_key in self.last_messages_sent[send_name]): 
+            if not (channel_key in self.last_messages_sent[send_name]): 
                 self.last_messages_sent[send_name][channel_key] = kafka_data.offset
             elif kafka_data.offset > self.last_messages_sent[send_name][channel_key]:
                 self.last_messages_sent[send_name][channel_key] = kafka_data.offset
@@ -198,17 +198,17 @@ class NetworkingManager:
             msg['__MSG__']['__SENT_FROM__'] = sender_details
             msg['__MSG__']['__SENT_TO__'] = receiver_details
             if self.checkpoint_protocol in ['UNC', 'CIC']:
+                receiving_name = msg['__MSG__']['__OP_NAME__']
+                receiving_partition = msg['__MSG__']['__PARTITION__']
+                task = asyncio.create_task(self.log_message(msg, sending_partition, sending_name, receiving_partition, receiving_name))
+                self.message_logging.add(task)
+                task.add_done_callback(self.message_logging.discard)
+                await task
+                msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = task.result()
                 msg['__MSG__']['__CIC_DETAILS__'] = {}
                 if self.checkpoint_protocol == 'CIC':
                     msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, sending_name, msg['__MSG__']['__OP_NAME__'])
                     self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
-                receiving_name = msg['__MSG__']['__OP_NAME__']
-                receiving_partition = msg['__MSG__']['__PARTITION__']
-            task = asyncio.create_task(self.log_message(msg, sending_partition, sending_name, receiving_partition, receiving_name))
-            self.message_logging.add(task)
-            task.add_done_callback(self.message_logging.discard)
-            await task
-            msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = task.result()
         new_msg = self.encode_message(msg, serializer)
         self.total_network_size += sys.getsizeof(new_msg)
         if msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':
@@ -229,6 +229,11 @@ class NetworkingManager:
             if (host, port) not in self.pools:
                 await self.create_socket_connection(host, port)
             socket_conn = next(self.pools[(host, port)])
+        msg['__MSG__']['__CIC_DETAILS__'] = {}
+        if self.checkpoint_protocol == 'CIC':
+            msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, msg['__MSG__']['__SENT_FROM__']['operator_name'], \
+                                                                                             msg['__MSG__']['__OP_NAME__'])
+            self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
         msg = self.encode_message(msg, serializer)
         socket_conn.zmq_socket.write((msg, ))
 
