@@ -1,3 +1,4 @@
+import asyncio
 import time
 from aiokafka import TopicPartition
 
@@ -14,6 +15,8 @@ class UncoordinatedCheckpointing:
         self.kafka_consumer = None
         self.last_messages_processed = {}
 
+        self.last_messages_processed_lock = asyncio.Lock()
+
     async def set_id(self, id):
         self.id = id
 
@@ -21,7 +24,12 @@ class UncoordinatedCheckpointing:
         self.peers = peers
 
     async def set_last_messages_processed(self, operator, channel, offset):
-        self.last_messages_processed[operator][channel] = offset
+        async with self.last_messages_processed_lock:
+            if not (channel in self.last_messages_processed[operator]):
+                self.last_messages_processed[operator][channel] = offset
+            elif offset > self.last_messages_processed[operator][channel]:
+                self.last_messages_processed[operator][channel] = offset
+
 
     async def get_offsets(self):
         return self.last_kafka_consumed

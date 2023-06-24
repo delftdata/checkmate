@@ -86,6 +86,9 @@ class Worker(object):
         self.no_failure_event = asyncio.Event()
         self.no_failure_event.set()
 
+        # message locks
+        self.last_message_processed_lock = asyncio.Lock()
+
         self.offsets_per_second = {}
         self.kafka_consumer: AIOKafkaConsumer = ...
 
@@ -95,6 +98,16 @@ class Worker(object):
             send_from=None
     ) -> bool:
         # logging.warning(f"run_function -> snapshot_event: {self.snapshot_event.is_set()}")
+        if send_from is not None:
+            if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
+                # Necessary for uncoordinated checkpointing
+                tmp_str = send_from['operator_partition'] * self.total_partitions_per_operator[payload.operator_name] \
+                            + payload.partition
+                incoming_channel = f"{send_from['operator_name']}_{payload.operator_name}_{tmp_str}"
+                async with self.last_message_processed_lock:
+                    await self.checkpointing.set_last_messages_processed(payload.operator_name,
+                                                                        incoming_channel,
+                                                                        send_from['kafka_offset'])
         success: bool = True
         operator_partition = self.registered_operators[(payload.operator_name, payload.partition)]
         response = await operator_partition.run_function(
@@ -130,15 +143,7 @@ class Worker(object):
                 value=msgpack_serialization(kafka_response),
                 partition=self.id-1
             ))
-        if send_from is not None:
-            if self.checkpoint_protocol == 'UNC' or self.checkpoint_protocol == 'CIC':
-                # Necessary for uncoordinated checkpointing
-                tmp_str = send_from['operator_partition'] * self.total_partitions_per_operator[payload.operator_name] \
-                            + payload.partition
-                incoming_channel = f"{send_from['operator_name']}_{payload.operator_name}_{tmp_str}"
-                await self.checkpointing.set_last_messages_processed(payload.operator_name,
-                                                                        incoming_channel,
-                                                                        send_from['kafka_offset'])
+
         return success
 
     @staticmethod
@@ -255,7 +260,7 @@ class Worker(object):
             # start the kafka consumer
             try:
                 await replay_consumer.start()
-                replay_consumer.seek(topic_partition, offset)
+                replay_consumer.seek(topic_partition, offset+1)
             except (UnknownTopicOrPartitionError, KafkaConnectionError):
                 time.sleep(1)
                 logging.warning(f'Kafka at {KAFKA_URL} not ready yet, sleeping for 1 second')
@@ -602,6 +607,7 @@ class Worker(object):
             case 'UNC':
                 del self.peers[self.id]
                 self.create_task(self.uncoordinated_checkpointing(pool, self.checkpoint_interval))
+                logging.warning("uncoordinated checkpointing started")
             case 'COR':
                 await self.checkpointing.set_peers(self.peers)
                 await self.checkpointing.process_channel_list(self.channel_list, worker_operators, partitions_to_ids)
