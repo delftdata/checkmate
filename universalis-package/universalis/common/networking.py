@@ -120,7 +120,10 @@ class NetworkingManager:
         logging.info(f'KAFKA PRODUCER STARTED FOR NETWORKING')
 
     async def start_kafka_logging_producer_pool(self):
-        await self.kafka_logging_producer_pool.start()  
+        await self.kafka_logging_producer_pool.start_limited()  
+
+    async def start_kafka_logging_sync_producer_pool(self):
+        self.kafka_logging_producer_pool.start_sync()
 
     async def flush_kafka_buffer(self, operator):
         await self.kafka_producer.flush()
@@ -130,9 +133,9 @@ class NetworkingManager:
     
     async def flush_kafka_producer_pool(self, operator):
         kafka_flushes = [kafka_producer.flush() for kafka_producer in self.kafka_logging_producer_pool.producer_pool]
-        asyncio.gather(*kafka_flushes)
-        kafka_flushes = []
-        asyncio.gather(*self.message_logging)
+        # asyncio.gather(*kafka_flushes)
+        # kafka_flushes = []
+        # asyncio.gather(*self.message_logging)
         self.message_logging = set()
         last_msg_sent = self.last_messages_sent[operator]
         self.last_messages_sent[operator] = {}
@@ -160,17 +163,17 @@ class NetworkingManager:
         else:
             logging.warning('The socket that you are trying to close does not exist')
 
-    async def log_message(self, msg, send_part, send_name, rec_part, rec_name, serializer: Serializer = Serializer.CLOUDPICKLE):
+    def log_message(self, msg, send_part, send_name, rec_part, rec_name, serializer: Serializer = Serializer.CLOUDPICKLE):
         logging_partition=send_part*(self.total_partitions_per_operator[rec_name]) + rec_part
-        kafka_data = await self.kafka_logging_producer_pool.pick_producer(logging_partition).send_and_wait(send_name+rec_name,
+        kafka_future = self.kafka_logging_producer_pool.pick_sync_producer(logging_partition).send(send_name+rec_name,
                                                 value=self.encode_message(msg, serializer),
                                                 partition=logging_partition)
+        kafka_data = kafka_future.get()
         channel_key = send_name+'_'+rec_name+'_'+str(logging_partition)
-        async with self.get_last_message_lock:
-            if not (channel_key in self.last_messages_sent[send_name]): 
-                self.last_messages_sent[send_name][channel_key] = kafka_data.offset
-            elif kafka_data.offset > self.last_messages_sent[send_name][channel_key]:
-                self.last_messages_sent[send_name][channel_key] = kafka_data.offset
+        if not (channel_key in self.last_messages_sent[send_name]): 
+            self.last_messages_sent[send_name][channel_key] = kafka_data.offset
+        elif kafka_data.offset > self.last_messages_sent[send_name][channel_key]:
+            self.last_messages_sent[send_name][channel_key] = kafka_data.offset
         return kafka_data.offset
 
     async def send_message(self,
@@ -200,11 +203,11 @@ class NetworkingManager:
             if self.checkpoint_protocol in ['UNC', 'CIC']:
                 receiving_name = msg['__MSG__']['__OP_NAME__']
                 receiving_partition = msg['__MSG__']['__PARTITION__']
-                task = asyncio.create_task(self.log_message(msg, sending_partition, sending_name, receiving_partition, receiving_name))
-                self.message_logging.add(task)
-                task.add_done_callback(self.message_logging.discard)
-                await task
-                msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = task.result()
+                kafka_offset = self.log_message(msg, sending_partition, sending_name, receiving_partition, receiving_name)
+                # self.message_logging.add(task)
+                # task.add_done_callback(self.message_logging.discard)
+                # await task
+                msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_offset
                 msg['__MSG__']['__CIC_DETAILS__'] = {}
                 if self.checkpoint_protocol == 'CIC':
                     msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, sending_name, msg['__MSG__']['__OP_NAME__'])

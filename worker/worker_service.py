@@ -336,12 +336,12 @@ class Worker(object):
             if not self.notified_coordinator and self.checkpoint_protocol == 'COR':
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
-                if self.id == 1:
-                    self.create_task(self.simple_failure())
-            if not self.notified_coordinator:
-                self.notified_coordinator = True
-                if self.id == 1:
-                    self.create_task(self.simple_failure())
+            #     if self.id == 1:
+            #         self.create_task(self.simple_failure())
+            # if not self.notified_coordinator:
+            #     self.notified_coordinator = True
+            #     if self.id == 1:
+            #         self.create_task(self.simple_failure())
             self.create_run_function_task(
                 self.run_function(
                     run_func_payload
@@ -620,7 +620,7 @@ class Worker(object):
             self.registered_operators[(operator.name, partition)] = operator
             if INGRESS_TYPE == 'KAFKA':
                 self.topic_partitions.append(TopicPartition(operator.name, partition))
-        await self.networking.start_kafka_logging_producer_pool()
+        await self.networking.start_kafka_logging_sync_producer_pool()
         self.create_task(self.start_kafka_consumer(self.topic_partitions))
         logging.info(
             f'Registered operators: {self.registered_operators} \n'
