@@ -52,7 +52,8 @@ class SocketPool:
     def close(self):
         for conn in self.conns:
             conn.zmq_socket.close()
-            conn.socket_lock.release()
+            if conn.socket_lock.locked():
+                conn.socket_lock.release()
         self.conns = []
 
 
@@ -117,10 +118,10 @@ class NetworkingManager:
                 logging.info("Waiting for Kafka networking producer")
                 continue
             break
-        logging.info(f'KAFKA PRODUCER STARTED FOR NETWORKING')
+        logging.info('KAFKA PRODUCER STARTED FOR NETWORKING')
 
     async def start_kafka_logging_producer_pool(self):
-        await self.kafka_logging_producer_pool.start_limited()  
+        await self.kafka_logging_producer_pool.start()  
 
     async def start_kafka_logging_sync_producer_pool(self):
         self.kafka_logging_producer_pool.start_sync()
@@ -133,9 +134,9 @@ class NetworkingManager:
     
     async def flush_kafka_producer_pool(self, operator):
         kafka_flushes = [kafka_producer.flush() for kafka_producer in self.kafka_logging_producer_pool.producer_pool]
-        # asyncio.gather(*kafka_flushes)
-        # kafka_flushes = []
-        # asyncio.gather(*self.message_logging)
+        asyncio.gather(*kafka_flushes)
+        kafka_flushes = []
+        asyncio.gather(*self.message_logging)
         self.message_logging = set()
         last_msg_sent = self.last_messages_sent[operator]
         self.last_messages_sent[operator] = {}
@@ -149,9 +150,11 @@ class NetworkingManager:
         for key in par_per_op.keys():
             self.last_messages_sent[key] = {}
 
-    def close_all_connections(self):
-        for pool in self.pools.values():
-            pool.close()
+    async def close_all_connections(self):
+        async with self.get_socket_lock:
+            for pool in self.pools.values():
+                pool.close()
+            self.pools = {}
 
     async def create_socket_connection(self, host: str, port):
         self.pools[(host, port)] = SocketPool(host, port)
@@ -163,18 +166,15 @@ class NetworkingManager:
         else:
             logging.warning('The socket that you are trying to close does not exist')
 
-    def log_message(self, msg, send_part, send_name, rec_part, rec_name, serializer: Serializer = Serializer.CLOUDPICKLE):
+    async def log_message(self, msg, send_part, send_name, rec_part, rec_name, serializer: Serializer = Serializer.CLOUDPICKLE):
         logging_partition=send_part*(self.total_partitions_per_operator[rec_name]) + rec_part
-        kafka_future = self.kafka_logging_producer_pool.pick_sync_producer(logging_partition).send(send_name+rec_name,
+        kafka_future = await self.kafka_logging_producer_pool.pick_producer(logging_partition).send_and_wait(send_name+rec_name,
                                                 value=self.encode_message(msg, serializer),
                                                 partition=logging_partition)
-        kafka_data = kafka_future.get()
         channel_key = send_name+'_'+rec_name+'_'+str(logging_partition)
-        if not (channel_key in self.last_messages_sent[send_name]): 
-            self.last_messages_sent[send_name][channel_key] = kafka_data.offset
-        elif kafka_data.offset > self.last_messages_sent[send_name][channel_key]:
-            self.last_messages_sent[send_name][channel_key] = kafka_data.offset
-        return kafka_data.offset
+        if channel_key not in self.last_messages_sent[send_name] or kafka_future.offset > self.last_messages_sent[send_name][channel_key]: 
+            self.last_messages_sent[send_name][channel_key] = kafka_future.offset
+        return kafka_future.offset
 
     async def send_message(self,
                            host,
@@ -198,29 +198,41 @@ class NetworkingManager:
             'port': port
         }
         if msg['__COM_TYPE__'] == 'RUN_FUN_REMOTE':
-            msg['__MSG__']['__SENT_FROM__'] = sender_details
-            msg['__MSG__']['__SENT_TO__'] = receiver_details
-            if self.checkpoint_protocol in ['UNC', 'CIC']:
-                receiving_name = msg['__MSG__']['__OP_NAME__']
-                receiving_partition = msg['__MSG__']['__PARTITION__']
-                kafka_offset = self.log_message(msg, sending_partition, sending_name, receiving_partition, receiving_name)
-                # self.message_logging.add(task)
-                # task.add_done_callback(self.message_logging.discard)
-                # await task
-                msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = kafka_offset
-                msg['__MSG__']['__CIC_DETAILS__'] = {}
-                if self.checkpoint_protocol == 'CIC':
-                    msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, sending_name, msg['__MSG__']['__OP_NAME__'])
-                    self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
-        new_msg = self.encode_message(msg, serializer)
-        self.total_network_size += sys.getsizeof(new_msg)
-        if msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':
+            async with self.get_last_message_lock:
+                msg['__MSG__']['__SENT_FROM__'] = sender_details
+                msg['__MSG__']['__SENT_TO__'] = receiver_details
+                if self.checkpoint_protocol in ['UNC', 'CIC']:
+                    receiving_name = msg['__MSG__']['__OP_NAME__']
+                    receiving_partition = msg['__MSG__']['__PARTITION__']
+                    task = asyncio.create_task(self.log_message(msg, sending_partition, sending_name, receiving_partition, receiving_name))
+                    self.message_logging.add(task)
+                    task.add_done_callback(self.message_logging.discard)
+                    await task
+                    msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = task.result()
+                    msg['__MSG__']['__CIC_DETAILS__'] = {}
+                    if self.checkpoint_protocol == 'CIC':
+                        msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, sending_name, msg['__MSG__']['__OP_NAME__'])
+                        self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
+                new_msg = self.encode_message(msg, serializer)
+                self.total_network_size += sys.getsizeof(new_msg)
+                socket_conn.zmq_socket.write((new_msg, ))
+        elif msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':
+            new_msg = self.encode_message(msg, serializer)
+            self.total_network_size += sys.getsizeof(new_msg)
             size = sys.getsizeof(new_msg)
             self.additional_uncoordinated_size += size
             self.additional_cic_size += size
+            socket_conn.zmq_socket.write((new_msg, ))
         elif msg['__COM_TYPE__'] in ['COORDINATED_MARKER', 'COORDINATED_ROUND_DONE', 'TAKE_COORDINATED_CHECKPOINT']:
+            new_msg = self.encode_message(msg, serializer)
+            self.total_network_size += sys.getsizeof(new_msg)
             self.additional_coordinated_size += sys.getsizeof(new_msg)
-        socket_conn.zmq_socket.write((new_msg, ))
+            socket_conn.zmq_socket.write((new_msg, ))
+        else:
+            new_msg = self.encode_message(msg, serializer)
+            self.total_network_size += sys.getsizeof(new_msg)
+            socket_conn.zmq_socket.write((new_msg, ))
+
 
     async def replay_message(self,
                              host,

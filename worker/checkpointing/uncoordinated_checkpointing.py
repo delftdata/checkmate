@@ -25,9 +25,7 @@ class UncoordinatedCheckpointing:
 
     async def set_last_messages_processed(self, operator, channel, offset):
         async with self.last_messages_processed_lock:
-            if not (channel in self.last_messages_processed[operator]):
-                self.last_messages_processed[operator][channel] = offset
-            elif offset > self.last_messages_processed[operator][channel]:
+            if channel not in self.last_messages_processed[operator] or offset > self.last_messages_processed[operator][channel]:
                 self.last_messages_processed[operator][channel] = offset
 
 

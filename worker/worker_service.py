@@ -88,6 +88,7 @@ class Worker(object):
 
         # message locks
         self.last_message_processed_lock = asyncio.Lock()
+        self.kafka_lock = asyncio.Lock()
 
         self.offsets_per_second = {}
         self.kafka_consumer: AIOKafkaConsumer = ...
@@ -181,7 +182,6 @@ class Worker(object):
             await self.no_failure_event.wait()
             snapshot_start = time.time_ns() // 1000000
             self.local_state: InMemoryOperatorState
-            self.snapshot_event.clear()
             async with self.snapshot_state_lock:
                 await asyncio.gather(*self.function_tasks)
                 self.function_tasks = set()
@@ -210,10 +210,10 @@ class Worker(object):
                                         'last_messages_sent': last_messages_sent,
                                         'snapshot_name': snapshot_name,
                                         'snapshot_duration': snapshot_duration}
+                    # logging.warning(f"snapshot_name: {snapshot_name}, coordinator_info: {coordinator_info}, snapshot_data: {snapshot_data}")
                 loop = asyncio.get_running_loop()
                 loop.run_in_executor(pool, self.async_snapshot,
                                      snapshot_name, snapshot_data, self.networking.encode_message, coordinator_info)
-            self.snapshot_event.set()
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
@@ -228,7 +228,6 @@ class Worker(object):
         last_kafka_consumed = {}
         if 'last_kafka_consumed' in deserialized_data.keys():
             last_kafka_consumed = deserialized_data['last_kafka_consumed']
-        # to_replay = []
         if self.checkpoint_protocol == 'COR':
             to_replay = await self.checkpointing.find_kafka_to_replay(operator_name, last_kafka_consumed)
         else:
@@ -250,45 +249,52 @@ class Worker(object):
 
     async def replay_from_kafka(self, operator_name, channel, offset):
         replay_until = await self.checkpointing.find_last_sent_offset(operator_name, channel)
+        # logging.warning(f"replay_until: {replay_until}, offset: {offset}")
         sent_op, rec_op, partition = channel.split('_')
         # Create a kafka consumer for the given channel and seek the given offset.
         # For every kafka message, send over TCP without logging the message sent.
-        replay_consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
-        topic_partition = TopicPartition(sent_op+rec_op, int(partition))
-        replay_consumer.assign([topic_partition])
-        while True: 
-            # start the kafka consumer
+        count = 0
+        if(replay_until > offset):
+            replay_consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
+            topic_partition = TopicPartition(sent_op+rec_op, int(partition))
+            replay_consumer.assign([topic_partition])
+            while True: 
+                # start the kafka consumer
+                try:
+                    await replay_consumer.start()
+                    replay_consumer.seek(topic_partition, offset+1)
+                except (UnknownTopicOrPartitionError, KafkaConnectionError):
+                    time.sleep(1)
+                    logging.warning(f'Kafka at {KAFKA_URL} not ready yet, sleeping for 1 second')
+                    continue
+                break
             try:
-                await replay_consumer.start()
-                replay_consumer.seek(topic_partition, offset+1)
-            except (UnknownTopicOrPartitionError, KafkaConnectionError):
-                time.sleep(1)
-                logging.warning(f'Kafka at {KAFKA_URL} not ready yet, sleeping for 1 second')
-                continue
-            break
-        try:
-            while True:
-                result = await replay_consumer.getone()
-                # logging.warning(f"replay_until: {replay_until}, offset: {result.offset}")
-                if replay_until is None or replay_until >= result.offset:
-                    await self.replay_log_message(result)
-                else:
-                    break
-        finally:
-            # Some unclosed AIOKafkaConnection error is triggered by replay_consumer.stop()
-            # logging.warning(f'Reached finally for channel {channel}')
-            await replay_consumer.stop()
-            # logging.warning(f'Stopped consumer for channel {channel}')
+                while True:
+                    result = await replay_consumer.getone()
+                    # logging.warning(f"replay_until: {replay_until}, offset: {result.offset}")
+                    if replay_until is None or replay_until >= result.offset:
+                        count += 1
+                        await self.replay_log_message(result)
+                    else:
+                        break
+            finally:
+                # Some unclosed AIOKafkaConnection error is triggered by replay_consumer.stop()
+                # logging.warning(f'Reached finally for channel {channel}')
+                await replay_consumer.stop()
+                # logging.warning(f'Stopped consumer for channel {channel}')
+        logging.warning(f"replayed {count} messages")
+
 
     async def replay_log_message(self, msg):
         deserialized_data: dict = self.networking.decode_message(msg.value)
         # logging.warning(f'replaying msg: {deserialized_data}')
         receiver_info = deserialized_data['__MSG__']['__SENT_TO__']
         deserialized_data['__MSG__']['__SENT_FROM__']['kafka_offset'] = msg.offset
+        deserialized_data['__MSG__']['__REPLAYED__'] = True
         await self.networking.replay_message(receiver_info['host'], receiver_info['port'], deserialized_data)
 
     async def simple_failure(self):
-        await asyncio.sleep(20)
+        await asyncio.sleep(23)
         self.snapshot_event.clear()
         self.no_failure_event.clear()
         while self.function_tasks:
@@ -317,7 +323,9 @@ class Worker(object):
                 if messages:
                     # logging.warning('Processing kafka messages')
                     for message in messages:
-                        self.handle_message_from_kafka(message)
+                        async with self.kafka_lock:
+                            self.handle_message_from_kafka(message)
+
 
     def handle_message_from_kafka(self, msg):
         logging.info(
@@ -336,17 +344,18 @@ class Worker(object):
             if not self.notified_coordinator and self.checkpoint_protocol == 'COR':
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
-            #     if self.id == 1:
-            #         self.create_task(self.simple_failure())
-            # if not self.notified_coordinator:
-            #     self.notified_coordinator = True
-            #     if self.id == 1:
-            #         self.create_task(self.simple_failure())
-            self.create_run_function_task(
-                self.run_function(
-                    run_func_payload
+                if self.id == 1:
+                    self.create_task(self.simple_failure())
+            if not self.notified_coordinator:
+                self.notified_coordinator = True
+                if self.id == 1:
+                    self.create_task(self.simple_failure())
+            if self.no_failure_event.is_set():
+                self.create_run_function_task(
+                    self.run_function(
+                        run_func_payload
+                    )
                 )
-            )
         else:
             logging.error(f"Invalid message type: {message_type} passed to KAFKA")
 
@@ -406,41 +415,46 @@ class Worker(object):
         message = deserialized_data['__MSG__']
         match message_type:
             case 'RUN_FUN_REMOTE' | 'RUN_FUN_RQ_RS_REMOTE':
-                request_id = message['__RQ_ID__']
-                if message_type == 'RUN_FUN_REMOTE':
-                    sender_details = message['__SENT_FROM__']
+                # logging.warning(f"RQ_DI: {message['__RQ_ID__']}, operator: {message['__OP_NAME__']},before")
+                if (not self.no_failure_event.is_set()) and ('__REPLAYED__' in message.keys()):
+                    await self.no_failure_event.wait()
+                if self.no_failure_event.is_set():
+                    # logging.warning(f"RQ_DI: {message['__RQ_ID__']}, operator: {message['__OP_NAME__']},after")
+                    request_id = message['__RQ_ID__']
+                    if message_type == 'RUN_FUN_REMOTE':
+                        sender_details = message['__SENT_FROM__']
 
-                    if self.checkpoint_protocol == 'COR' and \
-                            await self.checkpointing.check_marker_received(message['__OP_NAME__'],
-                                                                           sender_details['sender_id'],
-                                                                           sender_details['operator_name']):
-                        # logging.warning('Buffering message!')
-                        self.message_buffer[message['__OP_NAME__']].append(message)
+                        if self.checkpoint_protocol == 'COR' and \
+                                await self.checkpointing.check_marker_received(message['__OP_NAME__'],
+                                                                            sender_details['sender_id'],
+                                                                            sender_details['operator_name']):
+                            # logging.warning('Buffering message!')
+                            self.message_buffer[message['__OP_NAME__']].append(message)
+                        else:
+                            logging.info('CALLED RUN FUN FROM PEER')
+                            if self.checkpoint_protocol == 'CIC':
+                                oper_name = message['__OP_NAME__']
+                                # CHANGE TO CIC OBJECT
+                                cycle_detected, cic_clock = await self.checkpointing.cic_cycle_detection(
+                                    oper_name, message['__CIC_DETAILS__'])
+                                if cycle_detected:
+                                    logging.warning(f'Cycle detected for operator {oper_name}! Taking forced checkpoint.')
+                                    # await self.networking.update_cic_checkpoint(oper_name)
+                                    await self.take_snapshot(pool, message['__OP_NAME__'], cic_clock=cic_clock)
+                            payload = self.unpack_run_payload(message, request_id)
+                            self.create_run_function_task(
+                                self.run_function(
+                                    payload, send_from=sender_details
+                                )
+                            )
                     else:
-                        logging.info('CALLED RUN FUN FROM PEER')
-                        if self.checkpoint_protocol == 'CIC':
-                            oper_name = message['__OP_NAME__']
-                            # CHANGE TO CIC OBJECT
-                            cycle_detected, cic_clock = await self.checkpointing.cic_cycle_detection(
-                                oper_name, message['__CIC_DETAILS__'])
-                            if cycle_detected:
-                                logging.warning(f'Cycle detected for operator {oper_name}! Taking forced checkpoint.')
-                                # await self.networking.update_cic_checkpoint(oper_name)
-                                await self.take_snapshot(pool, message['__OP_NAME__'], cic_clock=cic_clock)
-                        payload = self.unpack_run_payload(message, request_id)
+                        logging.info('CALLED RUN FUN RQ RS FROM PEER')
+                        payload = self.unpack_run_payload(message, request_id, response_socket=resp_adr)
                         self.create_run_function_task(
                             self.run_function(
-                                payload, send_from=sender_details
+                                payload
                             )
                         )
-                else:
-                    logging.info('CALLED RUN FUN RQ RS FROM PEER')
-                    payload = self.unpack_run_payload(message, request_id, response_socket=resp_adr)
-                    self.create_run_function_task(
-                        self.run_function(
-                            payload
-                        )
-                    )
             case 'CHECKPOINT_PROTOCOL':
                 self.checkpoint_protocol = message[0]
                 self.checkpoint_interval = message[1]
@@ -454,6 +468,7 @@ class Worker(object):
                 self.router.write((resp_adr, reply))
             case 'TAKE_COORDINATED_CHECKPOINT':
                 if self.checkpoint_protocol == 'COR':
+                    self.snapshot_event.clear()
                     sources = await self.checkpointing.get_source_operators()
                     if len(sources) == 0:
                         logging.warning('No source operators, nothing to checkpoint.'
@@ -467,6 +482,7 @@ class Worker(object):
                     await self.process_message_buffer(message[2])
                     checkpointing_done = await self.checkpointing.set_sink_operator(message[2])
                     if checkpointing_done and self.no_failure_event.is_set():
+                        self.snapshot_event.set()
                         await self.networking.send_message(
                             DISCOVERY_HOST, DISCOVERY_PORT,
                             {
@@ -475,11 +491,23 @@ class Worker(object):
                             },
                             Serializer.MSGPACK
                         )
+                        
             case 'RECOVER_FROM_SNAPSHOT':
-                logging.warning(f'Recovery message received.')
+                logging.warning('Recovery message received.')
                 self.no_failure_event.clear()
                 self.snapshot_event.clear()
-                asyncio.gather(*self.function_tasks)
+                logging.warning(f'function tasks size before canceling: {len(self.function_tasks)}')
+                while self.function_tasks:
+                    t = self.function_tasks.pop()
+                    t.cancel()
+                    try:
+                        await t
+                    except asyncio.CancelledError:
+                        pass            
+                logging.warning(f'function tasks size after canceling: {len(self.function_tasks)}')
+                # await self.networking.close_all_connections()
+                # self.networking = NetworkingManager()
+
                 match self.checkpoint_protocol:
                     case 'CIC' | 'UNC':
                         for op_name in message.keys():
@@ -498,6 +526,7 @@ class Worker(object):
                                 await self.restore_from_snapshot(snapshot_to_restore, op_name)
                             # Replay channels from corresponding offsets in message[1]
                             for channel in message[op_name][1].keys():
+                                logging.warning(f"started_replaying {channel}")
                                 await self.replay_from_kafka(op_name, channel, message[op_name][1][channel])
                                 logging.warning(f"replayed channel {channel}")
                             await self.networking.send_message(
@@ -620,7 +649,7 @@ class Worker(object):
             self.registered_operators[(operator.name, partition)] = operator
             if INGRESS_TYPE == 'KAFKA':
                 self.topic_partitions.append(TopicPartition(operator.name, partition))
-        await self.networking.start_kafka_logging_sync_producer_pool()
+        await self.networking.start_kafka_logging_producer_pool()
         self.create_task(self.start_kafka_consumer(self.topic_partitions))
         logging.info(
             f'Registered operators: {self.registered_operators} \n'
@@ -635,8 +664,10 @@ class Worker(object):
             interval_randomness = random.randint(checkpoint_interval - 1, checkpoint_interval + 1)
             await asyncio.sleep(interval_randomness)
             if self.no_failure_event.is_set():
+                self.snapshot_event.clear()
                 for operator in self.total_partitions_per_operator.keys():
                     await self.take_snapshot(pool, operator)
+                self.snapshot_event.set()
 
     async def communication_induced_checkpointing(self, pool, checkpoint_interval):
         while self.waiting_for_exe_graph:
@@ -676,7 +707,7 @@ class Worker(object):
                     if '__COM_TYPE__' not in deserialized_data:
                         logging.error("Deserialized data do not contain a message type")
                     else:
-                        await self.worker_controller(pool, deserialized_data, resp_adr)
+                        self.create_task(self.worker_controller(pool, deserialized_data, resp_adr))
             finally:
                 await self.kafka_egress_producer_pool.close()
 
