@@ -26,15 +26,27 @@ services:
     env_file:
       - env-example/minio.env
 
-  minio:
-    image: minio/minio:latest
-    ports:
-      - "9001:9000"
-    volumes:
-      - minio_volume:/data
-    env_file:
-      - env-example/minio.env
-    command: server /mnt/data
+  # minio:
+  #   image: minio/minio:latest
+  #   container_name: minio-container
+  #   ports:
+  #     - "9001:9000"
+  #   volumes:
+  #     - minio_volume:/data
+  #   env_file:
+  #     - env-example/minio.env
+  #   command: server /mnt/data
 
-volumes:
-  minio_volume: {}
+  # mc:
+  #   image: minio/mc:latest
+  #   hostname: minio_mc
+  #   entrypoint: >
+  #     /bin/sh -c "
+  #     until (/usr/bin/mc config host add myminio http://minio-container:9000 minio minio123) do echo '...waiting...' && sleep 1; done;
+  #     /usr/bin/mc admin trace myminio;
+  #     "
+  #   depends_on:
+  #     - minio
+
+# volumes:
+#   minio_volume: {}

@@ -90,6 +90,10 @@ class Worker(object):
         self.last_message_processed_lock = asyncio.Lock()
         self.kafka_lock = asyncio.Lock()
 
+        # checkpoint start event
+        self.start_checkpointing = asyncio.Event()
+        self.start_checkpointing.clear()
+
         self.offsets_per_second = {}
         self.kafka_consumer: AIOKafkaConsumer = ...
 
@@ -158,10 +162,13 @@ class Worker(object):
             secret_key=MINIO_SECRET_KEY, secure=False
         )
         bytes_file: bytes = compressed_cloudpickle_serialization(snapshot_data)
+        logging.warning(f'finished compression of {snapshot_name}')
         minio_client.put_object(bucket_name=SNAPSHOT_BUCKET_NAME,
                                 object_name=snapshot_name,
                                 data=io.BytesIO(bytes_file),
                                 length=len(bytes_file))
+        
+        logging.warning(f"{snapshot_name} send to minio.")
 
         if coordinator_info is not None:
             msg = message_encoder(
@@ -341,15 +348,13 @@ class Worker(object):
         if message_type == 'RUN_FUN':
             run_func_payload: RunFuncPayload = self.unpack_run_payload(message, msg.key, timestamp=msg.timestamp)
             logging.info(f'RUNNING FUNCTION FROM KAFKA: {run_func_payload.function_name} {run_func_payload.key}')
-            if not self.notified_coordinator and self.checkpoint_protocol == 'COR':
-                self.notified_coordinator = True
-                self.create_task(self.notify_coordinator())
-                if self.id == 1:
-                    self.create_task(self.simple_failure())
             if not self.notified_coordinator:
                 self.notified_coordinator = True
+                self.create_task(self.notify_coordinator())
+                self.start_checkpointing.set()
                 if self.id == 1:
                     self.create_task(self.simple_failure())
+
             if self.no_failure_event.is_set():
                 self.create_run_function_task(
                     self.run_function(
@@ -386,6 +391,7 @@ class Worker(object):
             outgoing_channels = await self.checkpointing.get_outgoing_channels(source)
             # Send marker on all outgoing channels
             await self.take_snapshot(pool, source, cor_round=_round)
+            logging.warning("sending markers")
             for _id, operator in outgoing_channels:
                 self.create_task(self.send_marker(source, _id, operator, _round))
 
@@ -663,7 +669,7 @@ class Worker(object):
         while True:
             interval_randomness = random.randint(checkpoint_interval - 1, checkpoint_interval + 1)
             await asyncio.sleep(interval_randomness)
-            if self.no_failure_event.is_set():
+            if self.no_failure_event.is_set() and self.start_checkpointing.is_set():
                 self.snapshot_event.clear()
                 for operator in self.total_partitions_per_operator.keys():
                     await self.take_snapshot(pool, operator)

@@ -23,7 +23,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'UNC'
+CHECKPOINT_PROTOCOL: str = 'COR'
 
 CHECKPOINT_INTERVAL: int = 5
 
@@ -340,7 +340,7 @@ class CoordinatorService:
 
     async def get_metrics(self):
         while(True):
-            await asyncio.sleep(180)
+            await asyncio.sleep(90)
             logging.warning('GETTING METRICS!')
             offsets_per_second = {}
             total_network_size = 0
@@ -386,7 +386,6 @@ class CoordinatorService:
             logging.warning("Unable to create minio bucket")
 
     async def main(self):
-        self.create_task(self.get_metrics())
         router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")  # coordinator
         logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT}")
         # ADD DIFFERENT LOGIC FOR TESTING STATE RECOVERY
@@ -454,8 +453,11 @@ class CoordinatorService:
                         for id in self.started_processing.keys():
                             start_checkpointing = start_checkpointing and self.started_processing[id]
                         if start_checkpointing:
-                            logging.warning('All workers started processing, starting coordinated checkpointing.')
-                            self.create_task(self.coordinated_checkpointing(CHECKPOINT_INTERVAL))
+                            logging.warning('All workers started processing.')
+                            if CHECKPOINT_PROTOCOL == 'COR':
+                                logging.warning('Coordinated checkpointing started.')
+                                self.create_task(self.coordinated_checkpointing(CHECKPOINT_INTERVAL))
+                            self.create_task(self.get_metrics())
                     case 'RECOVERY_DONE':
                         self.recovery_done[message] = True
                         all_workers_done = True
