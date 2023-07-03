@@ -13,5 +13,5 @@ async def read(ctx: StatefulFunction, *args):
         function_name='stateful_join',
         key=auction.seller,
         params=(auction,),
-        serializer=Serializer.CLOUDPICKLE
+        serializer=Serializer.PICKLE
     )

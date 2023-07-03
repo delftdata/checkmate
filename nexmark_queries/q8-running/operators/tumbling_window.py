@@ -26,7 +26,7 @@ async def add(ctx: StatefulFunction, item: Entity):
             function_name='stateless_join',
             key=ctx.key,
             params=(current_window["persons"], ),
-            serializer=Serializer.CLOUDPICKLE
+            serializer=Serializer.PICKLE
         )
     else:
         await ctx.call_remote_function_no_response(
@@ -34,7 +34,7 @@ async def add(ctx: StatefulFunction, item: Entity):
             function_name='stateless_join',
             key=ctx.key,
             params=(current_window["auctions"], ),
-            serializer=Serializer.CLOUDPICKLE
+            serializer=Serializer.PICKLE
         )
         
 

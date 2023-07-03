@@ -15,7 +15,7 @@ from universalis.common.kafka_producer_pool import KafkaProducerPool
 
 from .logging import logging
 from .serialization import Serializer, msgpack_serialization, msgpack_deserialization, \
-    cloudpickle_serialization, cloudpickle_deserialization
+    cloudpickle_serialization, cloudpickle_deserialization, pickle_serialization, pickle_deserialization
 
 KAFKA_URL: str = os.getenv('KAFKA_URL', None)
 
@@ -121,7 +121,7 @@ class NetworkingManager:
         logging.info('KAFKA PRODUCER STARTED FOR NETWORKING')
 
     async def start_kafka_logging_producer_pool(self):
-        await self.kafka_logging_producer_pool.start()  
+        await self.kafka_logging_producer_pool.start()
 
     async def start_kafka_logging_sync_producer_pool(self):
         self.kafka_logging_producer_pool.start_sync()
@@ -131,12 +131,12 @@ class NetworkingManager:
         last_msg_sent = self.last_messages_sent[operator]
         self.last_messages_sent[operator] = {}
         return last_msg_sent
-    
+
     async def flush_kafka_producer_pool(self, operator):
         kafka_flushes = [kafka_producer.flush() for kafka_producer in self.kafka_logging_producer_pool.producer_pool]
-        asyncio.gather(*kafka_flushes)
+        await asyncio.gather(*kafka_flushes)
         kafka_flushes = []
-        asyncio.gather(*self.message_logging)
+        await asyncio.gather(*self.message_logging)
         self.message_logging = set()
         last_msg_sent = self.last_messages_sent[operator]
         self.last_messages_sent[operator] = {}
@@ -166,13 +166,21 @@ class NetworkingManager:
         else:
             logging.warning('The socket that you are trying to close does not exist')
 
-    async def log_message(self, msg, send_part, send_name, rec_part, rec_name, serializer: Serializer = Serializer.CLOUDPICKLE):
+    async def log_message(self,
+                          msg,
+                          send_part,
+                          send_name,
+                          rec_part,
+                          rec_name,
+                          serializer: Serializer = Serializer.PICKLE):
         logging_partition=send_part*(self.total_partitions_per_operator[rec_name]) + rec_part
-        kafka_future = await self.kafka_logging_producer_pool.pick_producer(logging_partition).send_and_wait(send_name+rec_name,
-                                                value=self.encode_message(msg, serializer),
-                                                partition=logging_partition)
-        channel_key = send_name+'_'+rec_name+'_'+str(logging_partition)
-        if channel_key not in self.last_messages_sent[send_name] or kafka_future.offset > self.last_messages_sent[send_name][channel_key]: 
+        kafka_future = await self.kafka_logging_producer_pool.pick_producer(
+            logging_partition).send_and_wait(send_name+rec_name,
+                                             value=self.encode_message(msg, serializer),
+                                             partition=logging_partition)
+        channel_key = f'{send_name}_{rec_name}_{logging_partition}'
+        if channel_key not in self.last_messages_sent[send_name] or \
+                kafka_future.offset > self.last_messages_sent[send_name][channel_key]:
             self.last_messages_sent[send_name][channel_key] = kafka_future.offset
         return kafka_future.offset
 
@@ -204,14 +212,21 @@ class NetworkingManager:
                 if self.checkpoint_protocol in ['UNC', 'CIC']:
                     receiving_name = msg['__MSG__']['__OP_NAME__']
                     receiving_partition = msg['__MSG__']['__PARTITION__']
-                    task = asyncio.create_task(self.log_message(msg, sending_partition, sending_name, receiving_partition, receiving_name))
+                    task = asyncio.create_task(self.log_message(msg,
+                                                                sending_partition,
+                                                                sending_name,
+                                                                receiving_partition,
+                                                                receiving_name))
                     self.message_logging.add(task)
                     task.add_done_callback(self.message_logging.discard)
                     await task
                     msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = task.result()
                     msg['__MSG__']['__CIC_DETAILS__'] = {}
                     if self.checkpoint_protocol == 'CIC':
-                        msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, sending_name, msg['__MSG__']['__OP_NAME__'])
+                        msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host,
+                                                                                                         port,
+                                                                                                         sending_name,
+                                                                                                         msg['__MSG__']['__OP_NAME__'])
                         self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
                 new_msg = self.encode_message(msg, serializer)
                 self.total_network_size += sys.getsizeof(new_msg)
@@ -238,7 +253,7 @@ class NetworkingManager:
                              host,
                              port,
                              msg,
-                             serializer: Serializer = Serializer.CLOUDPICKLE):
+                             serializer: Serializer = Serializer.PICKLE):
         # Replays a message without logging anything
         async with self.get_socket_lock:
             if (host, port) not in self.pools:
@@ -284,6 +299,9 @@ class NetworkingManager:
         elif serializer == Serializer.MSGPACK:
             msg = struct.pack('>H', 1) + msgpack_serialization(msg)
             return msg
+        elif serializer == Serializer.PICKLE:
+            msg = struct.pack('>H', 2) + pickle_serialization(msg)
+            return msg
         else:
             logging.info(f'Serializer: {serializer} is not supported')
 
@@ -294,5 +312,7 @@ class NetworkingManager:
             return cloudpickle_deserialization(data[2:])
         elif serializer == 1:
             return msgpack_deserialization(data[2:])
+        elif serializer == 2:
+            return pickle_deserialization(data[2:])
         else:
             logging.info(f'Serializer: {serializer} is not supported')

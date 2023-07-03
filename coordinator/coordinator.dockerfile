@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.11.4-slim
 
 RUN groupadd universalis \
     && useradd -m -d /usr/local/universalis -g universalis universalis

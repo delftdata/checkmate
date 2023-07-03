@@ -1,7 +1,3 @@
-#!/bin/bash
+#!/bin/sh
 
-set -m
-
-exec python worker/worker_service.py &
-
-exec redis-server /usr/local/etc/redis/redis.conf
+python worker/worker_service.py

@@ -13,5 +13,5 @@ async def read(ctx: StatefulFunction, *args):
         function_name='add',
         key=bid.bidder,
         params=(bid, ),
-        serializer=Serializer.CLOUDPICKLE
+        serializer=Serializer.PICKLE
     )

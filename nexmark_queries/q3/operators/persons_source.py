@@ -13,5 +13,5 @@ async def read(ctx: StatefulFunction, *args):
         function_name='filter',
         key=ctx.key,
         params=(person,),
-        serializer=Serializer.CLOUDPICKLE
+        serializer=Serializer.PICKLE
     )

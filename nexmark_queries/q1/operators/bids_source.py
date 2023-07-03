@@ -13,5 +13,5 @@ async def read(ctx: StatefulFunction, *args):
         function_name='dollarToEuro',
         key=ctx.key,
         params=(bid,),
-        serializer=Serializer.CLOUDPICKLE
+        serializer=Serializer.PICKLE
     )

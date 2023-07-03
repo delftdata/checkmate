@@ -33,7 +33,7 @@ async def trigger(ctx: StatefulFunction, trigger_interval_sec: float):
                     function_name='count',
                     key=key,
                     params=(time.time(), current_window[key], ),
-                    serializer=Serializer.CLOUDPICKLE
+                    serializer=Serializer.PICKLE
                 ) for key in current_window.keys()
             ]
             await asyncio.gather(*tasks)

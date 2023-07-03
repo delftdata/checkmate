@@ -13,5 +13,5 @@ async def filter(ctx: StatefulFunction, person: Person):
             function_name='stateful_join',
             key=person.id,
             params=(person,),
-            serializer=Serializer.CLOUDPICKLE
+            serializer=Serializer.PICKLE
         )

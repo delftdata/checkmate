@@ -14,5 +14,5 @@ async def count(ctx: StatefulFunction, timestamp, items: list):
         function_name='output',
         key=ctx.key,
         params=(timestamp ,ctx.key, current_count, ),
-        serializer=Serializer.CLOUDPICKLE
+        serializer=Serializer.PICKLE
     )

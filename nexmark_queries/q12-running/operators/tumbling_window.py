@@ -22,7 +22,7 @@ async def add(ctx: StatefulFunction, item: Entity):
         function_name='stateless_join',
         key=ctx.key,
         params=(time.time(), current_window, ),
-        serializer=Serializer.CLOUDPICKLE
+        serializer=Serializer.PICKLE
     )
 
 
