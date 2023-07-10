@@ -1,6 +1,7 @@
 import asyncio
 import io
 import os
+import sys
 import time
 import random
 from timeit import default_timer as timer
@@ -161,14 +162,16 @@ class Worker(object):
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY, secure=False
         )
+        # minio_client.trace_on(sys.stderr)
         bytes_file: bytes = compressed_cloudpickle_serialization(snapshot_data)
-        logging.warning(f'finished compression of {snapshot_name}')
+        # logging.warning(f'finished compression of {snapshot_name}')
         minio_client.put_object(bucket_name=SNAPSHOT_BUCKET_NAME,
                                 object_name=snapshot_name,
                                 data=io.BytesIO(bytes_file),
                                 length=len(bytes_file))
         
-        logging.warning(f"{snapshot_name} send to minio.")
+        
+        # logging.warning(f"{snapshot_name} send to minio.")
 
         if coordinator_info is not None:
             msg = message_encoder(
@@ -391,7 +394,7 @@ class Worker(object):
             outgoing_channels = await self.checkpointing.get_outgoing_channels(source)
             # Send marker on all outgoing channels
             await self.take_snapshot(pool, source, cor_round=_round)
-            logging.warning("sending markers")
+            # logging.warning("sending markers")
             for _id, operator in outgoing_channels:
                 self.create_task(self.send_marker(source, _id, operator, _round))
 

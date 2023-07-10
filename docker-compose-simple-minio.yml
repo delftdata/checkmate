@@ -1,0 +1,26 @@
+version: "3"
+services:
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9001:9000"
+    volumes:
+      - minio_volume:/data
+    env_file:
+      - env-example/minio.env
+    command: server /mnt/data
+
+  mc:
+    image: minio/mc:latest
+    hostname: minio_mc
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc config host add myminio http://minio:9000 minio minio123) do echo '...waiting...' && sleep 1; done;
+      /usr/bin/mc admin trace -v --all myminio;
+      "
+    depends_on:
+      - minio
+
+volumes:
+  minio_volume: {}
