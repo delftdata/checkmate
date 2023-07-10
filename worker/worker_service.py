@@ -98,6 +98,8 @@ class Worker(object):
         self.offsets_per_second = {}
         self.kafka_consumer: AIOKafkaConsumer = ...
 
+        self.snapshot_taken_message_size = 0
+
     async def run_function(
             self,
             payload: RunFuncPayload,
@@ -172,7 +174,6 @@ class Worker(object):
         
         
         # logging.warning(f"{snapshot_name} send to minio.")
-
         if coordinator_info is not None:
             msg = message_encoder(
                 {
@@ -184,7 +185,11 @@ class Worker(object):
             sync_socket_to_coordinator.connect(f'tcp://{DISCOVERY_HOST}:{DISCOVERY_PORT}')
             sync_socket_to_coordinator.send(msg)
             sync_socket_to_coordinator.close()
-        return True
+            return {
+                    "__COM_TYPE__": 'SNAPSHOT_TAKEN',
+                    "__MSG__": coordinator_info
+                }.__sizeof__()
+        return 0
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
     async def take_snapshot(self, pool: concurrent.futures.ProcessPoolExecutor, operator, cic_clock=0, cor_round=-1):
@@ -223,9 +228,17 @@ class Worker(object):
                     # logging.warning(f"snapshot_name: {snapshot_name}, coordinator_info: {coordinator_info}, snapshot_data: {snapshot_data}")
                 loop = asyncio.get_running_loop()
                 loop.run_in_executor(pool, self.async_snapshot,
-                                     snapshot_name, snapshot_data, self.networking.encode_message, coordinator_info)
+                                     snapshot_name, snapshot_data, self.networking.encode_message, coordinator_info)\
+                                        .add_done_callback(self.update_network_sizes)
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
+
+    def update_network_sizes(self, future):
+        self.networking.total_network_size += future.result()
+        if self.checkpoint_protocol == 'UNC':
+            self.networking.additional_uncoordinated_size += future.result()
+        elif self.checkpoint_protocol == 'CIC':
+            self.networking.additional_cic_size += future.result()
 
     async def restore_from_snapshot(self, snapshot_to_restore, operator_name):
         state_to_restore = self.minio_client.get_object(
@@ -355,8 +368,8 @@ class Worker(object):
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
                 self.start_checkpointing.set()
-                if self.id == 1:
-                    self.create_task(self.simple_failure())
+                # if self.id == 1:
+                #     self.create_task(self.simple_failure())
 
             if self.no_failure_event.is_set():
                 self.create_run_function_task(

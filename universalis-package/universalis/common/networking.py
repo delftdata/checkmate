@@ -227,25 +227,27 @@ class NetworkingManager:
                                                                                                          port,
                                                                                                          sending_name,
                                                                                                          msg['__MSG__']['__OP_NAME__'])
-                        self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
+                        self.additional_cic_size += '__CIC_DETAILS__'.__sizeof__()
+                        self.additional_cic_size += msg['__MSG__']['__CIC_DETAILS__'].__sizeof__()
                 new_msg = self.encode_message(msg, serializer)
-                self.total_network_size += sys.getsizeof(new_msg)
+                self.total_network_size += msg.__sizeof__()
                 socket_conn.zmq_socket.write((new_msg, ))
         elif msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':
             new_msg = self.encode_message(msg, serializer)
-            self.total_network_size += sys.getsizeof(new_msg)
-            size = sys.getsizeof(new_msg)
+            self.total_network_size += msg.__sizeof__()
+            size = msg.__sizeof__()
+            # logging.warning(f"snapshot_taken size:{size}")
             self.additional_uncoordinated_size += size
             self.additional_cic_size += size
             socket_conn.zmq_socket.write((new_msg, ))
         elif msg['__COM_TYPE__'] in ['COORDINATED_MARKER', 'COORDINATED_ROUND_DONE', 'TAKE_COORDINATED_CHECKPOINT']:
             new_msg = self.encode_message(msg, serializer)
-            self.total_network_size += sys.getsizeof(new_msg)
-            self.additional_coordinated_size += sys.getsizeof(new_msg)
+            self.total_network_size += msg.__sizeof__()
+            self.additional_coordinated_size += msg.__sizeof__()
             socket_conn.zmq_socket.write((new_msg, ))
         else:
             new_msg = self.encode_message(msg, serializer)
-            self.total_network_size += sys.getsizeof(new_msg)
+            self.total_network_size += msg.__sizeof__()
             socket_conn.zmq_socket.write((new_msg, ))
 
 
@@ -263,7 +265,9 @@ class NetworkingManager:
         if self.checkpoint_protocol == 'CIC':
             msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, msg['__MSG__']['__SENT_FROM__']['operator_name'], \
                                                                                              msg['__MSG__']['__OP_NAME__'])
-            self.additional_cic_size += sys.getsizeof(msg['__MSG__']['__CIC_DETAILS__'])
+            self.additional_cic_size += msg.__sizeof__()
+        elif self.checkpoint_protocol == 'UNC':
+            self.additional_uncoordinated_size += msg.__sizeof__()
         msg = self.encode_message(msg, serializer)
         socket_conn.zmq_socket.write((msg, ))
 
