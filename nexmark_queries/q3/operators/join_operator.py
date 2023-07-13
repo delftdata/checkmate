@@ -3,7 +3,7 @@ import random
 from universalis.common.operator import StatefulFunction, Operator
 from universalis.nexmark.entities import Auction, Entity, Person
 
-join_operator = Operator('join', n_partitions=6)
+join_operator = Operator('join', n_partitions=10)
 
 
 @join_operator.register
@@ -42,7 +42,7 @@ async def stateful_join(ctx: StatefulFunction, item: Entity):
         await ctx.put(state)
 
     if isinstance(item, Auction):
-        for person in state['persons'][:-1]:
+        for person in state['persons']:
                 joined_row = (item.to_tuple(), person,)
                 await ctx.call_remote_function_no_response(
                     operator_name='sink',
@@ -52,7 +52,7 @@ async def stateful_join(ctx: StatefulFunction, item: Entity):
                 )
 
     elif isinstance(item, Person):
-        for auction in state['auctions'][:-1]:
+        for auction in state['auctions']:
                 joined_row = (item.to_tuple(), auction, )
                 await ctx.call_remote_function_no_response(
                     operator_name='sink',

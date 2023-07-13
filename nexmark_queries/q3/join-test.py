@@ -10,7 +10,7 @@ from universalis.common.stateflow_ingress import IngressTypes
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
-from operators import q1_graph
+from operators import q3_graph
 
 UNIVERSALIS_HOST: str = 'localhost'
 UNIVERSALIS_PORT: int = 8886
@@ -25,39 +25,23 @@ async def main():
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
-    await universalis.submit(q1_graph.g)
+    await universalis.submit(q3_graph.g)
 
     print('Graph submitted')
 
     channel_list = [
-        (None, 'bidsSource', False),
-        ('bidsSource', 'currencyMapper', False),
-        ('currencyMapper', 'sink', False),
+        (None, 'personsSource', False),
+        (None, 'auctionsSource', False),
+        ('personsSource', 'personsFilter', False),
+        ('auctionsSource', 'join', False),
+        ('personsFilter', 'join', False),
+        ('join', 'sink', False),
         ('sink', None, False)
     ]
 
     await universalis.send_channel_list(channel_list)
 
+    time.sleep(60)
 
-    time.sleep(10)
-    # input("Press when you want to start producing.")
-
-    subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
-               "--generator-parallelism", "1",
-               "--enable-bids-topic", "true",
-               "--load-pattern", "static",
-               "--experiment-length", "1",
-               "--use-default-configuration", "false",
-               "--rate", "5000",
-               "--max-noise", "0",
-               "--iteration-duration-ms", "90000",
-               "--kafka-server", "localhost:9093",
-               "--uni-bids-partitions", "10"
-               ])
-
-    await universalis.close()
-
-
-
-uvloop.install()
-asyncio.run(main())
+    with open("results/q3/test-input.csv", "r") as fp:
+        fp.readline

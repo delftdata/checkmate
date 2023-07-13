@@ -224,7 +224,7 @@ public class BidPersonGeneratorKafka {
         BidPersonGeneratorKafka bidpersonGenerator = new BidPersonGeneratorKafka();
         try{
             bidpersonGenerator.run(args);
-            Thread.sleep(1200000);
+            Thread.sleep(120000);
         }
         catch (Exception e){
             e.printStackTrace();

@@ -185,10 +185,10 @@ class Worker(object):
             sync_socket_to_coordinator.connect(f'tcp://{DISCOVERY_HOST}:{DISCOVERY_PORT}')
             sync_socket_to_coordinator.send(msg)
             sync_socket_to_coordinator.close()
-            return {
+            return msgpack_serialization({
                     "__COM_TYPE__": 'SNAPSHOT_TAKEN',
                     "__MSG__": coordinator_info
-                }.__sizeof__()
+                }).__sizeof__()
         return 0
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
@@ -317,7 +317,7 @@ class Worker(object):
         await self.networking.replay_message(receiver_info['host'], receiver_info['port'], deserialized_data)
 
     async def simple_failure(self):
-        await asyncio.sleep(23)
+        await asyncio.sleep(48)
         self.snapshot_event.clear()
         self.no_failure_event.clear()
         while self.function_tasks:
