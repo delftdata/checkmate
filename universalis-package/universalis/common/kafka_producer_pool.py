@@ -28,7 +28,7 @@ class KafkaProducerPool(object):
         return conn
 
     def pick_producer(self, partition):
-        return self.producer_pool[partition]
+        return self.producer_pool[partition % self.size]
 
     def pick_sync_producer(self, partition) -> KafkaProducer:
         return self.sync_producer_pool[partition]
@@ -39,6 +39,7 @@ class KafkaProducerPool(object):
     async def start(self):
         for _ in range(self.size):
             self.producer_pool.append(await self.start_kafka_egress_producer())
+        logging.warning("all producers have started")
 
     def start_sync(self):
         for _ in range(self.size):

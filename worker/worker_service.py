@@ -97,6 +97,7 @@ class Worker(object):
 
         self.offsets_per_second = {}
         self.kafka_consumer: AIOKafkaConsumer = ...
+        self.channels = {}
 
         self.snapshot_taken_message_size = 0
 
@@ -400,6 +401,12 @@ class Worker(object):
         self.function_tasks.add(task)
         task.add_done_callback(self.function_tasks.discard)
 
+    def set_channels_dict(self, channel_list):
+        for t in channel_list:
+            from_op, to_op, shuffle = t
+            if from_op is not None and to_op is not None:
+                self.channels[from_op + to_op] = shuffle
+
 
     async def checkpoint_coordinated_sources(self, pool, sources, _round):
         for source in sources:
@@ -483,6 +490,8 @@ class Worker(object):
                 self.networking.set_checkpoint_protocol(message[0])
             case 'SEND_CHANNEL_LIST':
                 self.channel_list = message
+                self.set_channels_dict(channel_list=self.channel_list)
+                self.networking.set_channels(self.channels)
             case 'GET_METRICS':
                 logging.warning('METRIC REQUEST RECEIVED.')
                 return_value = (self.offsets_per_second, await self.networking.get_total_network_size(), await self.networking.get_protocol_network_size())
@@ -527,8 +536,6 @@ class Worker(object):
                     except asyncio.CancelledError:
                         pass            
                 logging.warning(f'function tasks size after canceling: {len(self.function_tasks)}')
-                # await self.networking.close_all_connections()
-                # self.networking = NetworkingManager()
 
                 match self.checkpoint_protocol:
                     case 'CIC' | 'UNC':

@@ -82,6 +82,11 @@ class NetworkingManager:
         self.kafka_logging_producer_pool = KafkaProducerPool(self.id, KAFKA_URL, size=100)
         self.message_logging = set()
 
+        self.channels = {}
+
+    def set_channels(self, channel_dict):
+        self.channels = channel_dict
+
     def set_id(self, id):
         self.id = id
 
@@ -173,7 +178,10 @@ class NetworkingManager:
                           rec_part,
                           rec_name,
                           serializer: Serializer = Serializer.PICKLE):
-        logging_partition=send_part*(self.total_partitions_per_operator[rec_name]) + rec_part
+        if self.channels[send_name+rec_name]:
+            logging_partition=send_part*(self.total_partitions_per_operator[rec_name]) + rec_part
+        else:
+            logging_partition=send_part
         kafka_future = await self.kafka_logging_producer_pool.pick_producer(
             logging_partition).send_and_wait(send_name+rec_name,
                                              value=self.encode_message(msg, serializer),

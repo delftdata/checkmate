@@ -23,7 +23,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'CIC'
+CHECKPOINT_PROTOCOL: str = 'UNC'
 
 CHECKPOINT_INTERVAL: int = 5
 
@@ -78,7 +78,7 @@ class CoordinatorService:
 
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
-        self.partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message, checkpointing_protocol=CHECKPOINT_PROTOCOL)
+        self.partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message, checkpointing_protocol=CHECKPOINT_PROTOCOL, channel_list=self.channel_list)
         # For every channel, initialize a last_received to zero, to make sure checkpoints are replayed from offset 0.
         for operator_one in self.partitions_to_ids.keys():
             for operator_two in self.partitions_to_ids.keys():
@@ -414,6 +414,7 @@ class CoordinatorService:
                                 self.messages_to_replay[id][op] = {}
                         logging.info(f"Submitted Stateflow Graph to Workers")
                     case 'SEND_CHANNEL_LIST':
+                        self.channel_list = message
                         for worker_id in self.worker_ips.keys():
                             await self.networking.send_message(
                                 self.worker_ips[worker_id], WORKER_PORT,

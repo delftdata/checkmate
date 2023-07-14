@@ -33,24 +33,26 @@ class Coordinator:
                                      stateflow_graph: StateflowGraph,
                                      ingress_type: IngressTypes = IngressTypes.KAFKA,
                                      scheduler_type=None,
-                                     checkpointing_protocol=''):
+                                     checkpointing_protocol='',
+                                     channel_list = []
+                                     ):
         if not isinstance(stateflow_graph, StateflowGraph):
             raise NotAStateflowGraph
         scheduler = RoundRobin()
         # Create kafka topic per worker
         if ingress_type == IngressTypes.KAFKA:
-            self.create_kafka_ingress_topics(stateflow_graph, self.workers.keys(), checkpointing_protocol)
+            self.create_kafka_ingress_topics(stateflow_graph, self.workers.keys(), checkpointing_protocol, channel_list)
         # Return the following await, should contain operators/partitions per workerid
         return await scheduler.schedule(self.workers, stateflow_graph, network_manager)
 
     @staticmethod
-    def create_kafka_ingress_topics(stateflow_graph: StateflowGraph, workers, protocol):
+    def create_kafka_ingress_topics(stateflow_graph: StateflowGraph, workers, protocol, channel_list):
         kafka_url: str = os.getenv('KAFKA_URL', None)
         if kafka_url is None:
             logging.error('Kafka URL not given')
         while True:
             try:
-                client = KafkaAdminClient(bootstrap_servers=kafka_url)
+                client = KafkaAdminClient(bootstrap_servers=kafka_url, request_timeout_ms=300000)
                 break
             except (NoBrokersAvailable, NodeNotReadyError):
                 logging.warning(f'Kafka at {kafka_url} not ready yet, sleeping for 1 second')
@@ -63,15 +65,26 @@ class Coordinator:
         
         # i*(j+1) + j
         if protocol in ["CIC", "UNC"]:
-            for key_one in partitions_per_operator.keys():
-                for key_two in partitions_per_operator.keys():
-                    if key_one is not key_two:
-                        topic_name = key_one + key_two
-                        topic_partitions = partitions_per_operator[key_one] * partitions_per_operator[key_two]
-                        topics.append(NewTopic(name= topic_name, num_partitions=topic_partitions, replication_factor=1))
+            for t in channel_list:
+                from_op, to_op, shuffle = t
+                if from_op is not None and to_op is not None:
+                    if shuffle:
+                        topic_partitions = partitions_per_operator[from_op] * partitions_per_operator[to_op]
+                    else:
+                        topic_partitions = partitions_per_operator[from_op]
+                    topic_name = from_op + to_op
+                    topics.append(NewTopic(name= topic_name, num_partitions=topic_partitions, replication_factor=1))
+
+            # for key_one in partitions_per_operator.keys():
+            #     for key_two in partitions_per_operator.keys():
+            #         if key_one is not key_two:
+            #             topic_name = key_one + key_two
+            #             topic_partitions = partitions_per_operator[key_one] * partitions_per_operator[key_two]
+            #             topics.append(NewTopic(name= topic_name, num_partitions=topic_partitions, replication_factor=1))
                 
         topics.append(NewTopic(name='universalis-egress', num_partitions=len(workers), replication_factor=1))
         try:
             client.create_topics(topics)
+            logging.warning("Topics created")
         except TopicAlreadyExistsError:
             logging.warning(f'Some of the Kafka topics already exists, job already submitted or rescaling')
