@@ -22,12 +22,6 @@ async def main():
                               ingress_type=IngressTypes.KAFKA,
                               kafka_url=KAFKA_URL)
     await universalis.start()
-    ####################################################################################################################
-    # SUBMIT STATEFLOW GRAPH ###########################################################################################
-    ####################################################################################################################
-    await universalis.submit(q1_graph.g)
-
-    print('Graph submitted')
 
     channel_list = [
         (None, 'bidsSource', False),
@@ -38,6 +32,12 @@ async def main():
 
     await universalis.send_channel_list(channel_list)
 
+    ####################################################################################################################
+    # SUBMIT STATEFLOW GRAPH ###########################################################################################
+    ####################################################################################################################
+    await universalis.submit(q1_graph.g)
+
+    print('Graph submitted')
 
     time.sleep(10)
     # input("Press when you want to start producing.")

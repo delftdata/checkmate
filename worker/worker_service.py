@@ -278,7 +278,7 @@ class Worker(object):
         # Create a kafka consumer for the given channel and seek the given offset.
         # For every kafka message, send over TCP without logging the message sent.
         count = 0
-        if(replay_until > offset):
+        if(replay_until is not None and replay_until > offset):
             replay_consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
             topic_partition = TopicPartition(sent_op+rec_op, int(partition))
             replay_consumer.assign([topic_partition])
@@ -369,8 +369,8 @@ class Worker(object):
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
                 self.start_checkpointing.set()
-                # if self.id == 1:
-                #     self.create_task(self.simple_failure())
+                if self.id == 1:
+                    self.create_task(self.simple_failure())
 
             if self.no_failure_event.is_set():
                 self.create_run_function_task(
