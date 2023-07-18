@@ -1,10 +1,17 @@
 from abc import abstractmethod, ABC
+import asyncio
 
 
 class BaseOperatorState(ABC):
 
     def __init__(self, operator_names: set[str]):
         self.operator_names = operator_names
+        self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
+        # snapshot event
+        self.snapshot_event: asyncio.Event = asyncio.Event()
+        self.snapshot_event.set()
+        self.no_failure_event = asyncio.Event()
+        self.no_failure_event.set()
     
     @abstractmethod
     async def get_operator_state(self, operator_name: str):

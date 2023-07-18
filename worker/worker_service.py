@@ -74,18 +74,16 @@ class Worker(object):
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY, secure=False
         )
-        self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
+        self.snapshot_state_lock = None
         # snapshot event
-        self.snapshot_event: asyncio.Event = asyncio.Event()
-        self.snapshot_event.set()
+        self.snapshot_event = None
         # CIC variables
         self.waiting_for_exe_graph = True
         # Coordinated variables
         self.notified_coordinator = False
         self.message_buffer = {}
         # failure
-        self.no_failure_event = asyncio.Event()
-        self.no_failure_event.set()
+        self.no_failure_event = None
 
         # message locks
         self.last_message_processed_lock = asyncio.Lock()
@@ -356,7 +354,7 @@ class Worker(object):
             f"Consumed: {msg.topic} {msg.partition} {msg.offset} "
             f"{msg.key} {msg.value} {msg.timestamp}"
         )
-        if self.checkpointing is not None:
+        if self.checkpointing is not None and "Source" in msg.topic:
             self.checkpointing.set_consumed_offset(msg.topic, msg.partition, msg.offset)
         deserialized_data: dict = self.networking.decode_message(msg.value)
         # This data should be added to a replay kafka topic.
@@ -369,10 +367,16 @@ class Worker(object):
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
                 self.start_checkpointing.set()
-                if self.id == 1:
-                    self.create_task(self.simple_failure())
+                # if self.id == 1:
+                #     self.create_task(self.simple_failure())
 
-            if self.no_failure_event.is_set():
+            if message['__FUN_NAME__'] == 'trigger':
+                self.create_task(
+                    self.run_function(
+                        run_func_payload
+                    )
+                )
+            elif self.no_failure_event.is_set():
                 self.create_run_function_task(
                     self.run_function(
                         run_func_payload
@@ -605,6 +609,9 @@ class Worker(object):
         operator_names: set[str] = set([operator.name for operator in self.registered_operators.values()])
         if self.operator_state_backend == LocalStateBackend.DICT:
             self.local_state = InMemoryOperatorState(operator_names)
+            self.snapshot_state_lock = self.local_state.snapshot_state_lock
+            self.snapshot_event = self.local_state.snapshot_event
+            self.no_failure_event = self.local_state.no_failure_event
         elif self.operator_state_backend == LocalStateBackend.REDIS:
             self.local_state = RedisOperatorState(operator_names)
         else:
