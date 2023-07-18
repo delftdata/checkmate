@@ -134,8 +134,8 @@ class CoordinatedCheckpointing:
         return to_replay
 
     def set_consumed_offset(self, topic, partition, offset):
-        if topic not in self.source_operators:
-            self.source_operators.add(topic)
+        # if topic not in self.source_operators:
+        #     self.source_operators.add(topic)
         if topic not in self.last_kafka_consumed:
             self.last_kafka_consumed[topic] = {}
         self.last_kafka_consumed[topic][str(partition)] = offset
