@@ -93,9 +93,7 @@ class StatefulFunction(Function):
         return state
     
     async def clean_operator_state(self):
-        await self.__state.snapshot_event.wait()
-        await self.__state.no_failure_event.wait()
-        await self.__state.clean_operator_state(self.__operator_name)
+            await self.__state.clean_operator_state(self.__operator_name)
 
 
     async def __send_async_calls(self):

@@ -74,17 +74,18 @@ class Worker(object):
             MINIO_URL, access_key=MINIO_ACCESS_KEY,
             secret_key=MINIO_SECRET_KEY, secure=False
         )
-        self.snapshot_state_lock = None
+        self.snapshot_state_lock: asyncio.Lock = asyncio.Lock()
         # snapshot event
-        self.snapshot_event = None
+        self.snapshot_event: asyncio.Event = asyncio.Event()
+        self.snapshot_event.set()
         # CIC variables
         self.waiting_for_exe_graph = True
         # Coordinated variables
         self.notified_coordinator = False
         self.message_buffer = {}
         # failure
-        self.no_failure_event = None
-
+        self.no_failure_event = asyncio.Event()
+        self.no_failure_event.set()
         # message locks
         self.last_message_processed_lock = asyncio.Lock()
         self.kafka_lock = asyncio.Lock()
@@ -367,8 +368,8 @@ class Worker(object):
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
                 self.start_checkpointing.set()
-                # if self.id == 1:
-                #     self.create_task(self.simple_failure())
+                if self.id == 1:
+                    self.create_task(self.simple_failure())
 
             if message['__FUN_NAME__'] == 'trigger':
                 self.create_task(
@@ -609,9 +610,9 @@ class Worker(object):
         operator_names: set[str] = set([operator.name for operator in self.registered_operators.values()])
         if self.operator_state_backend == LocalStateBackend.DICT:
             self.local_state = InMemoryOperatorState(operator_names)
-            self.snapshot_state_lock = self.local_state.snapshot_state_lock
-            self.snapshot_event = self.local_state.snapshot_event
-            self.no_failure_event = self.local_state.no_failure_event
+            # self.snapshot_state_lock = self.local_state.snapshot_state_lock
+            # self.snapshot_event = self.local_state.snapshot_event
+            # self.no_failure_event = self.local_state.no_failure_event
         elif self.operator_state_backend == LocalStateBackend.REDIS:
             self.local_state = RedisOperatorState(operator_names)
         else:

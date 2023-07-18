@@ -16,20 +16,20 @@ async def add(ctx: StatefulFunction, item: Entity):
             current_window.append(item)
         else:
             current_window = [item]
+        await ctx.call_remote_function_no_response(
+            operator_name='count',
+            function_name='count',
+            key=ctx.key,
+            params=(current_window, ),
+            serializer=Serializer.PICKLE
+        ) 
         await ctx.put(current_window)
-    await ctx.call_remote_function_no_response(
-        operator_name='count',
-        function_name='stateless_join',
-        key=ctx.key,
-        params=(time.time(), current_window, ),
-        serializer=Serializer.PICKLE
-    )
 
 
 @tumbling_window_operator.register
 async def trigger(ctx: StatefulFunction, trigger_interval_sec: float):
+    await asyncio.sleep(trigger_interval_sec/2)
     while True:
-        await asyncio.sleep(trigger_interval_sec)
         async with ctx.operator_lock:
             await ctx.clean_operator_state()
-        
+        await asyncio.sleep(trigger_interval_sec)
