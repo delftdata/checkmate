@@ -368,8 +368,8 @@ class Worker(object):
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
                 self.start_checkpointing.set()
-                if self.id == 1:
-                    self.create_task(self.simple_failure())
+                # if self.id == 1:
+                #     self.create_task(self.simple_failure())
 
             if message['__FUN_NAME__'] == 'trigger':
                 self.create_task(

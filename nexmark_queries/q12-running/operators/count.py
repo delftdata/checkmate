@@ -4,7 +4,7 @@ from universalis.common.logging import logging
 from universalis.nexmark.entities import Bid
 from universalis.common.serialization import Serializer
 
-count_operator = Operator('count', n_partitions=6)
+count_operator = Operator('count', n_partitions=10)
 
 @count_operator.register
 async def count(ctx: StatefulFunction, items: list):

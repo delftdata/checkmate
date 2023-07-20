@@ -82,4 +82,4 @@ ax.legend([handles[idx] for idx in order],[labels[idx] for idx in order],bbox_to
 ax.set_title(f"NexMark Q12 - {protocol}")
 plt.tight_layout()
 # plt.show()
-plt.savefig(f'results/q12/figures/{protocol}')
+plt.savefig(f'results/q12r/figures/{protocol}')
