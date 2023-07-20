@@ -185,10 +185,10 @@ class Worker(object):
             sync_socket_to_coordinator.connect(f'tcp://{DISCOVERY_HOST}:{DISCOVERY_PORT}')
             sync_socket_to_coordinator.send(msg)
             sync_socket_to_coordinator.close()
-            return msgpack_serialization({
-                    "__COM_TYPE__": 'SNAPSHOT_TAKEN',
-                    "__MSG__": coordinator_info
-                }).__sizeof__()
+            # return msgpack_serialization({
+            #         "__COM_TYPE__": 'SNAPSHOT_TAKEN',
+            #         "__MSG__": coordinator_info
+            #     }).__sizeof__()
         return 0
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
@@ -341,13 +341,13 @@ class Worker(object):
     async def consumer_read(self, consumer: AIOKafkaConsumer):
         while True:
             await self.snapshot_event.wait()
-            result = await consumer.getmany(timeout_ms=1)
+            result = await consumer.getmany(timeout_ms=1, max_records=100)
             for _, messages in result.items():
                 if messages:
                     # logging.warning('Processing kafka messages')
                     for message in messages:
-                        async with self.kafka_lock:
-                            self.handle_message_from_kafka(message)
+                        self.handle_message_from_kafka(message)
+            await asyncio.sleep(0.05)
 
 
     def handle_message_from_kafka(self, msg):
