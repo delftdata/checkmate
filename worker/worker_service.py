@@ -245,10 +245,13 @@ class Worker(object):
             bucket_name=SNAPSHOT_BUCKET_NAME,
             object_name=snapshot_to_restore
         ).data
+        restoring_data = time.time_ns() // 1000000
         async with self.snapshot_state_lock:
             deserialized_data = compressed_cloudpickle_deserialization(state_to_restore)
             self.local_state.data[operator_name] = deserialized_data['local_state_data']
+        logging.warning(f'restoring snapshot data took: {(time.time_ns() // 1000000) - restoring_data}')
         last_kafka_consumed = {}
+        find_replays = time.time_ns() // 1000000
         if 'last_kafka_consumed' in deserialized_data.keys():
             last_kafka_consumed = deserialized_data['last_kafka_consumed']
         if self.checkpoint_protocol == 'COR':
@@ -260,6 +263,7 @@ class Worker(object):
                                                                        last_kafka_consumed)
         for tp, offset in to_replay:
             self.kafka_ingress_consumer_pool.consumer_pool[tp].seek(tp, offset)
+        logging.warning(f'finding_replays took: {(time.time_ns() // 1000000) - find_replays}')
         logging.warning(f"Snapshot restored to: {snapshot_to_restore}")
 
     async def start_kafka_consumer(self, topic_partitions: list[TopicPartition]):
@@ -347,7 +351,7 @@ class Worker(object):
                     # logging.warning('Processing kafka messages')
                     for message in messages:
                         self.handle_message_from_kafka(message)
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)
 
 
     def handle_message_from_kafka(self, msg):
@@ -474,7 +478,9 @@ class Worker(object):
                                 if cycle_detected:
                                     logging.warning(f'Cycle detected for operator {oper_name}! Taking forced checkpoint.')
                                     # await self.networking.update_cic_checkpoint(oper_name)
+                                    self.snapshot_event.clear()
                                     await self.take_snapshot(pool, message['__OP_NAME__'], cic_clock=cic_clock)
+                                    self.snapshot_event.set()
                             payload = self.unpack_run_payload(message, request_id)
                             self.create_run_function_task(
                                 self.run_function(
@@ -532,6 +538,7 @@ class Worker(object):
                 logging.warning('Recovery message received.')
                 self.no_failure_event.clear()
                 self.snapshot_event.clear()
+                cleaning_running = time.time_ns() // 1000000
                 logging.warning(f'function tasks size before canceling: {len(self.function_tasks)}')
                 while self.function_tasks:
                     t = self.function_tasks.pop()
@@ -541,6 +548,7 @@ class Worker(object):
                     except asyncio.CancelledError:
                         pass            
                 logging.warning(f'function tasks size after canceling: {len(self.function_tasks)}')
+                logging.warning(f'stopping functions took: {(time.time_ns() // 1000000) - cleaning_running}')
 
                 match self.checkpoint_protocol:
                     case 'CIC' | 'UNC':
@@ -559,10 +567,12 @@ class Worker(object):
                                 snapshot_to_restore = f'snapshot_{self.id}_{op_name}_{message[op_name][0]}.bin'
                                 await self.restore_from_snapshot(snapshot_to_restore, op_name)
                             # Replay channels from corresponding offsets in message[1]
+                            replay_messages_start = time.time_ns() // 1000000
                             for channel in message[op_name][1].keys():
                                 logging.warning(f"started_replaying {channel}")
                                 await self.replay_from_kafka(op_name, channel, message[op_name][1][channel])
                                 logging.warning(f"replayed channel {channel}")
+                            logging.warning(f"replaying messages took: {(time.time_ns() // 1000000) - replay_messages_start}")
                             await self.networking.send_message(
                                 DISCOVERY_HOST, DISCOVERY_PORT,
                                 {
@@ -717,15 +727,21 @@ class Worker(object):
             interval_randomness = random.randint(checkpoint_interval-1, checkpoint_interval+1)
             current_time = time.time_ns() // 1000000
             last_snapshot_timestamp = await self.checkpointing.get_last_snapshot_timestamp(operator)
-            if current_time > last_snapshot_timestamp + (interval_randomness*1000):
-                await self.checkpointing.update_cic_checkpoint(operator)
-                cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
-                await self.take_snapshot(pool, operator, cic_clock=cic_clock)
-                await asyncio.sleep(interval_randomness)
+            if self.no_failure_event.is_set() and self.start_checkpointing.is_set():
+                if current_time > last_snapshot_timestamp + (interval_randomness*1000):
+                    await self.checkpointing.update_cic_checkpoint(operator)
+                    cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
+                    self.snapshot_event.clear()
+                    await self.take_snapshot(pool, operator, cic_clock=cic_clock)
+                    self.snapshot_event.set()
+                    await asyncio.sleep(interval_randomness)
+                else:
+                    await asyncio.sleep(
+                        ceil(((last_snapshot_timestamp + (checkpoint_interval*1000)) - current_time) / 1000)
+                    )
             else:
-                await asyncio.sleep(
-                    ceil(((last_snapshot_timestamp + (checkpoint_interval*1000)) - current_time) / 1000)
-                )
+                await asyncio.sleep(interval_randomness)
+
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
