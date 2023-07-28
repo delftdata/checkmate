@@ -39,8 +39,9 @@ async def main():
 
     print('Graph submitted')
 
-    time.sleep(10)
-    # input("Press when you want to start producing.")
+
+    # time.sleep(10)
+    input("Press when you want to start producing.")
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
                "--generator-parallelism", "1",
@@ -48,11 +49,11 @@ async def main():
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",
-               "--rate", "9000",
+               "--rate", "35000",
                "--max-noise", "0",
                "--iteration-duration-ms", "90000",
                "--kafka-server", "localhost:9093",
-               "--uni-bids-partitions", "10"
+               "--uni-bids-partitions", "50"
                ])
 
     await universalis.close()

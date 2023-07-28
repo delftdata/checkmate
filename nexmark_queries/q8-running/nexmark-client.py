@@ -51,7 +51,7 @@ async def main():
         # QALI IDEA
     # START WINDOW TRIGGER
     tasks = []
-    for key in range(0,10):
+    for key in range(0,50):
         tasks.append(universalis.send_kafka_event(operator=tumbling_window_operator,
                                            key=key,
                                            function="trigger",
@@ -73,12 +73,12 @@ async def main():
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",
-               "--rate", "5000",
+               "--rate", "15000",
                "--max-noise", "0",
                "--iteration-duration-ms", "90000",
                "--kafka-server", "localhost:9093",
-               "--uni-persons-partitions", "10",
-               "--uni-auctions-partitions", "10"
+               "--uni-persons-partitions", "50",
+               "--uni-auctions-partitions", "50"
                ])
 
     await universalis.close()

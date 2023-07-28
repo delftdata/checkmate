@@ -23,7 +23,7 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'UNC'
+CHECKPOINT_PROTOCOL: str = 'CIC'
 
 CHECKPOINT_INTERVAL: int = 5
 
@@ -168,6 +168,7 @@ class CoordinatorService:
         # TODO: Update methods one by one to incorporate operator.
         await self.add_edges_between_workers()
         await self.find_recovery_line()
+        logging.warning(f"Time to find recovery line: {(time.time_ns() // 1000000) - self.failure_time}")
         await self.send_restore_message()
         await self.clear_checkpoint_details()
 
