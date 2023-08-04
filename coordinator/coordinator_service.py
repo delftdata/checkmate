@@ -451,9 +451,9 @@ class CoordinatorService:
                     case 'STARTED_PROCESSING':
                         self.started_processing[message] = True
                         start_checkpointing = True
-                        logging.warning(f"id {message} started processing.")
                         for id in self.started_processing.keys():
                             start_checkpointing = start_checkpointing and self.started_processing[id]
+                        logging.warning(self.started_processing)
                         if start_checkpointing:
                             logging.warning('All workers started processing.')
                             if CHECKPOINT_PROTOCOL == 'COR':
