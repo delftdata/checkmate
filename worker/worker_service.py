@@ -371,6 +371,8 @@ class Worker(object):
         if message_type == 'RUN_FUN':
             run_func_payload: RunFuncPayload = self.unpack_run_payload(message, msg.key, timestamp=msg.timestamp)
             logging.info(f'RUNNING FUNCTION FROM KAFKA: {run_func_payload.function_name} {run_func_payload.key}')
+            if self.id in [1,2,3,4]:
+                logging.warning('RUN_FUN message received for id 1-4')
             if not self.notified_coordinator:
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
