@@ -451,7 +451,7 @@ class CoordinatorService:
                     case 'STARTED_PROCESSING':
                         self.started_processing[message] = True
                         start_checkpointing = True
-                        logging.warning 
+                        logging.warning(f"id {id} started processing.")
                         for id in self.started_processing.keys():
                             start_checkpointing = start_checkpointing and self.started_processing[id]
                         if start_checkpointing:
