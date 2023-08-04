@@ -230,6 +230,9 @@ class Worker(object):
                 loop.run_in_executor(pool, self.async_snapshot,
                                      snapshot_name, snapshot_data, self.networking.encode_message, coordinator_info)\
                                         .add_done_callback(self.update_network_sizes)
+                snapshot_end = time.time_ns() // 1000000
+                if snapshot_end - snapshot_start > 40:
+                    logging.warning(f'Operator: {operator}, Total time: {snapshot_end - snapshot_start}')
         else:
             logging.warning("Snapshot currently supported only for in-memory operator state")
 
