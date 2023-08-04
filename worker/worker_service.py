@@ -373,6 +373,7 @@ class Worker(object):
             logging.info(f'RUNNING FUNCTION FROM KAFKA: {run_func_payload.function_name} {run_func_payload.key}')
             if not self.notified_coordinator:
                 self.notified_coordinator = True
+                logging.warning(f'Coordinator should be notified! {self.id}')
                 self.create_task(self.notify_coordinator())
                 self.start_checkpointing.set()
                 if self.id == 1:
