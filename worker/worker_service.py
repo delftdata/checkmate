@@ -185,10 +185,10 @@ class Worker(object):
             sync_socket_to_coordinator.connect(f'tcp://{DISCOVERY_HOST}:{DISCOVERY_PORT}')
             sync_socket_to_coordinator.send(msg)
             sync_socket_to_coordinator.close()
-            # return msgpack_serialization({
-            #         "__COM_TYPE__": 'SNAPSHOT_TAKEN',
-            #         "__MSG__": coordinator_info
-            #     }).__sizeof__()
+            return msgpack_serialization({
+                    "__COM_TYPE__": 'SNAPSHOT_TAKEN',
+                    "__MSG__": coordinator_info
+                }).__sizeof__()
         return 0
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
@@ -375,8 +375,8 @@ class Worker(object):
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
                 self.start_checkpointing.set()
-                if self.id == 1:
-                    self.create_task(self.simple_failure())
+                # if self.id == 1:
+                #     self.create_task(self.simple_failure())
 
             if message['__FUN_NAME__'] == 'trigger':
                 self.create_task(
