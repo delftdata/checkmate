@@ -53,12 +53,12 @@ async def main():
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",
-               "--rate", "25000",
+               "--rate", "7000",
                "--max-noise", "0",
                "--iteration-duration-ms", "90000",
                "--kafka-server", "localhost:9093",
-               "--uni-persons-partitions", "50",
-               "--uni-auctions-partitions", "50"
+               "--uni-persons-partitions", "10",
+               "--uni-auctions-partitions", "10"
                ])
 
     await universalis.close()

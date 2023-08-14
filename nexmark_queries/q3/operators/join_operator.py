@@ -3,7 +3,7 @@ import random
 from universalis.common.operator import StatefulFunction, Operator
 from universalis.nexmark.entities import Auction, Entity, Person
 
-join_operator = Operator('join', n_partitions=50)
+join_operator = Operator('join', n_partitions=10)
 
 
 @join_operator.register
