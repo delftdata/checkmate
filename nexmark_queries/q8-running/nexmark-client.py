@@ -23,6 +23,19 @@ async def main():
                               ingress_type=IngressTypes.KAFKA,
                               kafka_url=KAFKA_URL)
     await universalis.start()
+
+    channel_list = [
+        (None, 'personsSource', False),
+        (None, 'auctionsSource', False),
+        ('personsSource', 'tumblingWindow', True),
+        ('auctionsSource', 'tumblingWindow', True),
+        ('tumblingWindow', 'join', False),
+        ('join', 'sink', False),
+        ('sink', None, False)
+    ]
+
+    await universalis.send_channel_list(channel_list)
+
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
@@ -38,17 +51,18 @@ async def main():
         # QALI IDEA
     # START WINDOW TRIGGER
     tasks = []
-    for key in range(0,1):
+    for key in range(0,10):
         tasks.append(universalis.send_kafka_event(operator=tumbling_window_operator,
                                            key=key,
                                            function="trigger",
                                            params=(10, )
                                            ))
+    print(len(tasks))
     responses = await asyncio.gather(*tasks)
     print(responses)
     tasks = []
     # SEND REQUESTS
-    time.sleep(10)
+    # time.sleep(10)
 
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
@@ -59,10 +73,12 @@ async def main():
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",
-               "--rate", "1000",
+               "--rate", "5000",
                "--max-noise", "0",
-               "--iteration-duration-ms", "60000",
-               "--kafka-server", "localhost:9093"
+               "--iteration-duration-ms", "90000",
+               "--kafka-server", "localhost:9093",
+               "--uni-persons-partitions", "10",
+               "--uni-auctions-partitions", "10"
                ])
 
     await universalis.close()

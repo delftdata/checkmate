@@ -135,7 +135,7 @@ class Universalis:
                 logging.info("Waiting for Kafka")
                 continue
             break
-        logging.info(f'KAFKA PRODUCER STARTED')
+        logging.info('KAFKA PRODUCER STARTED')
 
     async def send_execution_graph(self, stateflow_graph: StateflowGraph):
         await self.networking_manager.send_message(self.coordinator_adr,
@@ -147,7 +147,8 @@ class Universalis:
         await self.networking_manager.send_message(self.coordinator_adr,
                                                    self.coordinator_port,
                                                    {"__COM_TYPE__": 'SEND_CHANNEL_LIST',
-                                                    "__MSG__": list_of_channels})
+                                                    "__MSG__": list_of_channels},
+                                                   serializer=Serializer.PICKLE)
 
     async def start(self):
         await self.start_kafka_producer()

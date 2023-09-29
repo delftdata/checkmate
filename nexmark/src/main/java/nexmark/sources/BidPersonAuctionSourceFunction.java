@@ -54,7 +54,7 @@ public class BidPersonAuctionSourceFunction extends Thread {
     int uniBidsPartitions;
 
     int stoppedIterationNumber;
-
+    Random roundRobinPartitioner = new Random();
 
     /**
      * Constructor of BidPersonAuctionSourceFunction
@@ -329,11 +329,13 @@ public class BidPersonAuctionSourceFunction extends Thread {
         
         Person person = PersonGenerator.nextPerson(eventId, rnd, eventTimestampMs, this.generatorConfig);
 
-        int partition = (int) (eventId % uniPersonsPartitions);
+        // int partition = (int) (person.id % uniPersonsPartitions);
+        int partition = roundRobinPartitioner.nextInt(uniPersonsPartitions);
+
 
         try {
             byte[] serByteArray = {Integer.valueOf(0).byteValue(), Integer.valueOf(1).byteValue()};
-            byte[] msgByteArray = packEvent(person, eventId, partition).toByteArray();
+            byte[] msgByteArray = packEvent(person, partition, partition).toByteArray();
             ByteBuffer buff = ByteBuffer.wrap(new byte[ serByteArray.length + msgByteArray.length]);
             buff.put(serByteArray);
             buff.put(msgByteArray);
@@ -367,11 +369,12 @@ public class BidPersonAuctionSourceFunction extends Thread {
         
         Auction auction = AuctionGenerator.nextAuction(eventNumber, eventId, rnd, eventTimestampMs, this.generatorConfig);
 
-        int partition = (int) (eventId % uniAuctionsPartitions);
+        // int partition = (int) (auction.id % uniAuctionsPartitions);
+        int partition = roundRobinPartitioner.nextInt(uniAuctionsPartitions);
 
         try {
             byte[] serByteArray = {Integer.valueOf(0).byteValue(), Integer.valueOf(1).byteValue()};
-            byte[] msgByteArray = packEvent(auction, eventId, partition).toByteArray();
+            byte[] msgByteArray = packEvent(auction, auction.id, partition).toByteArray();
             ByteBuffer buff = ByteBuffer.wrap(new byte[ serByteArray.length + msgByteArray.length]);
             buff.put(serByteArray);
             buff.put(msgByteArray);
@@ -403,11 +406,12 @@ public class BidPersonAuctionSourceFunction extends Thread {
     public void produceBidEvent(long eventId, Random rnd, long eventTimestampMs, int uniBidsPartitions) throws JsonProcessingException{
         
         Bid bid = BidGenerator.nextBid(eventId, rnd, eventTimestampMs, this.generatorConfig);
-        int partition = (int) (eventId % uniBidsPartitions);
+        // int partition = (int) (eventId % uniBidsPartitions);
+        int partition = roundRobinPartitioner.nextInt(uniBidsPartitions);
 
         try {
             byte[] serByteArray = {Integer.valueOf(0).byteValue(), Integer.valueOf(1).byteValue()};
-            byte[] msgByteArray = packEvent(bid, eventId, partition).toByteArray();
+            byte[] msgByteArray = packEvent(bid, partition, partition).toByteArray();
             ByteBuffer buff = ByteBuffer.wrap(new byte[ serByteArray.length + msgByteArray.length]);
             buff.put(serByteArray);
             buff.put(msgByteArray);

@@ -22,6 +22,19 @@ async def main():
                               ingress_type=IngressTypes.KAFKA,
                               kafka_url=KAFKA_URL)
     await universalis.start()
+
+    channel_list = [
+        (None, 'personsSource', False),
+        (None, 'auctionsSource', False),
+        ('personsSource', 'personsFilter', True),
+        ('auctionsSource', 'join', True),
+        ('personsFilter', 'join', False),
+        ('join', 'sink', False),
+        ('sink', None, False)
+    ]
+
+    await universalis.send_channel_list(channel_list)
+
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
@@ -29,19 +42,7 @@ async def main():
 
     print('Graph submitted')
 
-    channel_list = [
-        (None, 'personsSource', False),
-        (None, 'auctionsSource', False),
-        ('personsSource', 'personsFilter', False),
-        ('auctionsSource', 'join', True),
-        ('personsFilter', 'join', True),
-        ('join', 'sink', False),
-        ('sink', None, False)
-    ]
-
-    await universalis.send_channel_list(channel_list)
-
-    time.sleep(1)
+    # time.sleep(60)
     input("Press when you want to start producing.")
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
@@ -52,10 +53,12 @@ async def main():
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",
-               "--rate", "1000",
+               "--rate", "7000",
                "--max-noise", "0",
-               "--iteration-duration-ms", "60000",
-               "--kafka-server", "localhost:9093"
+               "--iteration-duration-ms", "90000",
+               "--kafka-server", "localhost:9093",
+               "--uni-persons-partitions", "10",
+               "--uni-auctions-partitions", "10"
                ])
 
     await universalis.close()

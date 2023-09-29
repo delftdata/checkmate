@@ -1,6 +1,6 @@
 # networking service
 uvloop==0.17.0
-msgspec==0.15.1
+msgspec==0.16.0
 cloudpickle==2.2.1
 pyzmq==25.1.0
 aiozmq==1.0.0

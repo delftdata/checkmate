@@ -93,7 +93,7 @@ class StatefulFunction(Function):
         return state
     
     async def clean_operator_state(self):
-        await self.__state.clean_operator_state(self.__operator_name)
+            await self.__state.clean_operator_state(self.__operator_name)
 
 
     async def __send_async_calls(self):
@@ -128,6 +128,10 @@ class StatefulFunction(Function):
                                                                                                params)
 
         sender_partition: int = make_key_hashable(self.__key) % len(self.__dns[operator_name].keys())
+        # if operator_name == "personsFilter":
+        #     logging.warning(f"sender partition: {sender_partition}")
+        #     logging.warning(f"self.__key: {self.__key}, self.__dns len: {len(self.__dns[operator_name].keys())}")
+
 
         await self.__networking.send_message(operator_host,
                                              operator_port,

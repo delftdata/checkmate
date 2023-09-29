@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.11.4-slim
 RUN apt-get update && apt-get install -y redis-server
 
 COPY worker/redis.conf /usr/local/etc/redis/redis.conf

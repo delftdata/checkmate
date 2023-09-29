@@ -3,7 +3,7 @@ from universalis.common.logging import logging
 from universalis.nexmark.entities import Bid
 from universalis.common.serialization import Serializer
 
-bids_source_operator = Operator('bidsSource', n_partitions=6)
+bids_source_operator = Operator('bidsSource', n_partitions=10)
 
 @bids_source_operator.register
 async def read(ctx: StatefulFunction, *args):
@@ -13,5 +13,5 @@ async def read(ctx: StatefulFunction, *args):
         function_name='add',
         key=bid.bidder,
         params=(bid, ),
-        serializer=Serializer.CLOUDPICKLE
+        serializer=Serializer.PICKLE
     )

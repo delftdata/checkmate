@@ -134,3 +134,6 @@ minio-volume
 
 *.csv
 *.json
+
+*.png
+*.pdf

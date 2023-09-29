@@ -22,12 +22,6 @@ async def main():
                               ingress_type=IngressTypes.KAFKA,
                               kafka_url=KAFKA_URL)
     await universalis.start()
-    ####################################################################################################################
-    # SUBMIT STATEFLOW GRAPH ###########################################################################################
-    ####################################################################################################################
-    await universalis.submit(q1_graph.g)
-
-    print('Graph submitted')
 
     channel_list = [
         (None, 'bidsSource', False),
@@ -38,8 +32,17 @@ async def main():
 
     await universalis.send_channel_list(channel_list)
 
+    await asyncio.sleep(1)
 
-    time.sleep(1)
+    ####################################################################################################################
+    # SUBMIT STATEFLOW GRAPH ###########################################################################################
+    ####################################################################################################################
+    await universalis.submit(q1_graph.g)
+
+    print('Graph submitted')
+
+
+    # time.sleep(10)
     input("Press when you want to start producing.")
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
@@ -48,10 +51,11 @@ async def main():
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",
-               "--rate", "100",
+               "--rate", "7000",
                "--max-noise", "0",
-               "--iteration-duration-ms", "60000",
-               "--kafka-server", "localhost:9093"
+               "--iteration-duration-ms", "90000",
+               "--kafka-server", "localhost:9093",
+               "--uni-bids-partitions", "10"
                ])
 
     await universalis.close()
