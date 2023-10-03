@@ -7,6 +7,7 @@ from timeit import default_timer as timer
 
 import uvloop
 from universalis.common.stateflow_ingress import IngressTypes
+from universalis.nexmark.setup import setup
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
@@ -18,6 +19,9 @@ KAFKA_URL = 'localhost:9093'
 
 
 async def main():
+
+    args = setup()
+
     universalis = Universalis(UNIVERSALIS_HOST, UNIVERSALIS_PORT,
                               ingress_type=IngressTypes.KAFKA,
                               kafka_url=KAFKA_URL)
@@ -32,7 +36,7 @@ async def main():
 
     await universalis.send_channel_list(channel_list)
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(5)
 
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
@@ -42,8 +46,8 @@ async def main():
     print('Graph submitted')
 
 
-    # time.sleep(10)
-    input("Press when you want to start producing.")
+    time.sleep(60)
+    # input("Press when you want to start producing.")
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
                "--generator-parallelism", "1",
@@ -51,11 +55,11 @@ async def main():
                "--load-pattern", "static",
                "--experiment-length", "1",
                "--use-default-configuration", "false",
-               "--rate", "7000",
+               "--rate", args.rate,
                "--max-noise", "0",
                "--iteration-duration-ms", "90000",
                "--kafka-server", "localhost:9093",
-               "--uni-bids-partitions", "10"
+               "--uni-bids-partitions", args.bids_partitions
                ])
 
     await universalis.close()

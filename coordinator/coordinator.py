@@ -74,17 +74,10 @@ class Coordinator:
                         topic_partitions = partitions_per_operator[from_op]
                     topic_name = from_op + to_op
                     topics.append(NewTopic(name= topic_name, num_partitions=topic_partitions, replication_factor=1))
-
-            # for key_one in partitions_per_operator.keys():
-            #     for key_two in partitions_per_operator.keys():
-            #         if key_one is not key_two:
-            #             topic_name = key_one + key_two
-            #             topic_partitions = partitions_per_operator[key_one] * partitions_per_operator[key_two]
-            #             topics.append(NewTopic(name= topic_name, num_partitions=topic_partitions, replication_factor=1))
                 
         topics.append(NewTopic(name='universalis-egress', num_partitions=len(workers), replication_factor=1))
         try:
             client.create_topics(topics)
             logging.warning("Topics created")
         except TopicAlreadyExistsError:
-            logging.warning(f'Some of the Kafka topics already exists, job already submitted or rescaling')
+            logging.warning('Some of the Kafka topics already exists, job already submitted or rescaling')

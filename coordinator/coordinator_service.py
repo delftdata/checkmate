@@ -2,6 +2,7 @@ import asyncio
 import os
 import bisect
 import math
+import sys
 import time
 
 import aiozmq
@@ -14,6 +15,7 @@ from universalis.common.serialization import Serializer, cloudpickle_deserializa
 from minio import Minio
 
 from coordinator import Coordinator
+from setup import setup
 
 SERVER_PORT = WORKER_PORT = 8888
 
@@ -23,15 +25,14 @@ MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 # CIC, UNC, COR
-CHECKPOINT_PROTOCOL: str = 'COR'
 
 CHECKPOINT_INTERVAL: int = 5
 
 class CoordinatorService:
 
-    def __init__(self):
+    def __init__(self, checkpointing_protocol, checkpointing_interval):
+
         self.networking = NetworkingManager()
-        self.networking.set_checkpoint_protocol(CHECKPOINT_PROTOCOL)
         self.coordinator = Coordinator(WORKER_PORT)
         # background task references
         self.background_tasks = set()
@@ -55,6 +56,12 @@ class CoordinatorService:
         self.checkpointing_in_progress = asyncio.Event()
         self.checkpointing_in_progress.clear()
 
+        #checkpointing config
+        self.checkpointing_protocol = checkpointing_protocol
+        self.checkpointing_interval = checkpointing_interval
+        self.networking.set_checkpoint_protocol(checkpointing_protocol)
+        logging.warning(f"Checkpointing protocol set: {checkpointing_protocol}")
+
         #Coordinated approach
         self.checkpoint_round = -1
         self.started_processing = {}
@@ -75,10 +82,11 @@ class CoordinatorService:
         self.total_checkpointing_time = 0
         self.cor_start_time = 0
         self.amount_of_checkpoints = 0
+        self.total_checkpoints_numbers = 0
 
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
-        self.partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message, checkpointing_protocol=CHECKPOINT_PROTOCOL, channel_list=self.channel_list)
+        self.partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message, checkpointing_protocol=self.checkpointing_protocol, channel_list=self.channel_list)
         # For every channel, initialize a last_received to zero, to make sure checkpoints are replayed from offset 0.
         for operator_one in self.partitions_to_ids.keys():
             for operator_two in self.partitions_to_ids.keys():
@@ -340,44 +348,57 @@ class CoordinatorService:
         self.cor_start_time = time.time_ns() // 1000000
 
     async def get_metrics(self):
-        while(True):
-            await asyncio.sleep(90)
-            logging.warning('GETTING METRICS!')
-            offsets_per_second = {}
-            total_network_size = 0
-            protocol_specific_size = 0
-            for worker_id in self.worker_ips.keys():
-                worker_offsets, worker_tns, worker_pss = await self.networking.send_message_request_response(
-                    self.worker_ips[worker_id], WORKER_PORT,
-                    {
-                        "__COM_TYPE__": 'GET_METRICS',
-                        "__MSG__": ''
-                    },
-                    Serializer.MSGPACK
-                )
-                for op in worker_offsets.keys():
-                    if op not in offsets_per_second.keys():
-                        offsets_per_second[op] = {}
-                    for part in worker_offsets[op].keys():
-                        offsets_per_second[op][part] = worker_offsets[op][part]
-                total_network_size += worker_tns
-                protocol_specific_size += worker_pss
-            total_network_size += await self.networking.get_total_network_size()
-            protocol_specific_size += await self.networking.get_protocol_network_size()
-            logging.warning(f'Amount of useless checkpoints: {self.useless_checkpoints}')
-            if self.amount_of_failures > 0:
-                logging.warning(f'Average recovery time: {self.total_recovery_time / self.amount_of_failures}')
-            avg_cp_time = 0
-            match CHECKPOINT_PROTOCOL:
-                case 'COR':
-                    if self.checkpoint_round > 0:
-                        avg_cp_time = self.total_checkpointing_time / self.checkpoint_round
-                case _:
-                    if self.amount_of_checkpoints > 0:
-                        avg_cp_time = self.total_checkpointing_time / self.amount_of_checkpoints
-            logging.warning(f'Average checkpointing time: {avg_cp_time}')
-            logging.warning(f'Total network size: {total_network_size}, protocol size: {protocol_specific_size}')
-            logging.warning(f'offsets per second: {offsets_per_second}')
+        await asyncio.sleep(90)
+        logging.warning('GETTING METRICS!')
+        offsets_per_second = {}
+        total_network_size = 0
+        protocol_specific_size = 0
+        for worker_id in self.worker_ips.keys():
+            worker_offsets, worker_tns, worker_pss = await self.networking.send_message_request_response(
+                self.worker_ips[worker_id], WORKER_PORT,
+                {
+                    "__COM_TYPE__": 'GET_METRICS',
+                    "__MSG__": ''
+                },
+                Serializer.MSGPACK
+            )
+            for op in worker_offsets.keys():
+                if op not in offsets_per_second.keys():
+                    offsets_per_second[op] = {}
+                for part in worker_offsets[op].keys():
+                    offsets_per_second[op][part] = worker_offsets[op][part]
+            total_network_size += worker_tns
+            protocol_specific_size += worker_pss
+        total_network_size += await self.networking.get_total_network_size()
+        protocol_specific_size += await self.networking.get_protocol_network_size()
+        logging.warning(f'Amount of useless checkpoints: {self.useless_checkpoints}')
+        if self.amount_of_failures > 0:
+            logging.warning(f'Average recovery time: {self.total_recovery_time / self.amount_of_failures}')
+        avg_cp_time = 0
+        match self.checkpointing_protocol:
+            case 'COR':
+                if self.amount_of_failures:
+                    self.total_checkpoints_numbers = self.checkpoint_round
+                if self.checkpoint_round > 0:
+                    avg_cp_time = self.total_checkpointing_time / self.checkpoint_round
+            case _:
+                if self.amount_of_failures:
+                    self.total_checkpoints_numbers = self.amount_of_checkpoints
+                if not self.amount_of_checkpoints:
+                    avg_cp_time = self.total_checkpointing_time / self.amount_of_checkpoints
+        logging.warning(f'Average checkpointing time: {avg_cp_time}')
+        logging.warning(f'Total network size: {total_network_size}, protocol size: {protocol_specific_size}')
+        logging.warning(f'offsets per second: {offsets_per_second}')
+        with open("metrics.txt", "w") as fp:
+            fp.write(f'Average checkpointing time: {avg_cp_time}\n')
+            fp.write(f'Total network size: {total_network_size}, protocol size: {protocol_specific_size}\n')
+            fp.write(f'offsets per second: {offsets_per_second}\n')
+            fp.write(f'Amount of useless checkpoints: {self.useless_checkpoints}\n')
+            if self.amount_of_failures:
+                fp.write(f'Average recovery time: {self.total_recovery_time / self.amount_of_failures}\n')
+            else:
+                fp.write('Average recovery time: 0\n')
+            fp.write(f'Total number of checkpoints taken: {self.total_checkpoints_numbers}\n')
 
     def init_snapshot_minio_bucket(self):
         try:
@@ -396,7 +417,7 @@ class CoordinatorService:
             resp_adr, data = await router.read()
             deserialized_data: dict = self.networking.decode_message(data)
             if '__COM_TYPE__' not in deserialized_data:
-                logging.error(f"Deserialized data do not contain a message type")
+                logging.error("Deserialized data do not contain a message type")
             else:
                 message_type: str = deserialized_data['__COM_TYPE__']
                 message = deserialized_data['__MSG__']
@@ -413,7 +434,7 @@ class CoordinatorService:
                                 self.messages_received_intervals[id][op] = {}
                                 self.messages_sent_intervals[id][op] = {}
                                 self.messages_to_replay[id][op] = {}
-                        logging.info(f"Submitted Stateflow Graph to Workers")
+                        logging.info("Submitted Stateflow Graph to Workers")
                     case 'SEND_CHANNEL_LIST':
                         self.channel_list = message
                         for worker_id in self.worker_ips.keys():
@@ -444,7 +465,7 @@ class CoordinatorService:
                             message, WORKER_PORT,
                             {
                                 "__COM_TYPE__": 'CHECKPOINT_PROTOCOL',
-                                "__MSG__": (CHECKPOINT_PROTOCOL, CHECKPOINT_INTERVAL)
+                                "__MSG__": (self.checkpointing_protocol, CHECKPOINT_INTERVAL)
                             },
                             Serializer.MSGPACK
                         )
@@ -456,7 +477,7 @@ class CoordinatorService:
                         logging.warning(self.started_processing)
                         if start_checkpointing:
                             logging.warning('All workers started processing.')
-                            if CHECKPOINT_PROTOCOL == 'COR':
+                            if self.checkpointing_protocol == 'COR':
                                 logging.warning('Coordinated checkpointing started.')
                                 self.create_task(self.coordinated_checkpointing(CHECKPOINT_INTERVAL))
                             self.create_task(self.get_metrics())
@@ -497,7 +518,7 @@ class CoordinatorService:
                             self.checkpointing_in_progress.clear()
                         self.failure_time = time.time_ns() // 1000000
                         self.amount_of_failures += 1
-                        if CHECKPOINT_PROTOCOL == 'COR':
+                        if self.checkpointing_protocol == 'COR':
                             for worker_id in self.worker_ips.keys():
                                 await self.networking.send_message(
                                     self.worker_ips[worker_id], WORKER_PORT,
@@ -507,10 +528,12 @@ class CoordinatorService:
                                     },
                                     Serializer.MSGPACK
                                 )
+                            self.total_checkpoints_numbers = self.checkpoint_round
                         else:
                             logging.warning('Worker failed! Find recovery line.')
-                            if CHECKPOINT_PROTOCOL in ('COR', 'UNC', 'CIC'):
+                            if self.checkpointing_protocol in ('COR', 'UNC', 'CIC'):
                                 await self.test_snapshot_recovery()
+                                self.total_checkpoints_numbers = self.amount_of_checkpoints
                     case _:
                         # Any other message type
                         logging.error(f"COORDINATOR SERVER: Non supported message type: {message_type}")
@@ -518,5 +541,6 @@ class CoordinatorService:
 
 if __name__ == "__main__":
     uvloop.install()
-    coordinator_service = CoordinatorService()
+    args = setup()
+    coordinator_service = CoordinatorService(args.checkpointing_protocol[0], args.checkpointing_interval)
     asyncio.run(coordinator_service.main())

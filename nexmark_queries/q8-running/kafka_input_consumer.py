@@ -7,7 +7,8 @@ import uvloop
 from universalis.common.serialization import msgpack_deserialization
 from universalis.common.networking import NetworkingManager
 
-protocol = sys.argv[1]
+saving_dir = sys.argv[1]
+experiment_name = sys.argv[2]
 networking = NetworkingManager()
 
 async def consume():
@@ -20,14 +21,19 @@ async def consume():
     consumer.subscribe(['auctionsSource', 'personsSource'])
     try:
         # Consume messages
-        async for msg in consumer:
-            value = networking.decode_message(msg.value)
-            print("consumed: ", msg.key, value, msg.timestamp)
-            records.append((msg.key, value, msg.timestamp))
+        while True:
+            data = await consumer.getmany(timeout_ms=1000)
+            if not data:
+                break
+            for _, messages in data.items():
+                for msg in messages:
+                    value = networking.decode_message(msg.value)
+                    # print("consumed: ", msg.key, value, msg.timestamp)
+                    records.append((msg.key, value, msg.timestamp))
     finally:
         # Will leave consumer group; perform autocommit if enabled.
         await consumer.stop()
-        pd.DataFrame.from_records(records, columns=['request_id', 'request', 'timestamp']).to_csv(f'./results/q8r/{protocol}-input.csv',
+        pd.DataFrame.from_records(records, columns=['request_id', 'request', 'timestamp']).to_csv(f'{saving_dir}/{experiment_name}/{experiment_name}-input.csv',
                                                                                                    index=False)
 
 uvloop.install()

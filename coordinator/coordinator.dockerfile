@@ -1,5 +1,8 @@
 FROM python:3.11.4-slim
 
+ARG protocol="COR"
+ARG interval=5
+
 RUN groupadd universalis \
     && useradd -m -d /usr/local/universalis -g universalis universalis
 
@@ -21,8 +24,10 @@ COPY --chown=universalis:universalis coordinator/start-coordinator.sh /usr/local
 RUN chmod a+x /usr/local/bin/start-coordinator.sh
 
 ENV PYTHONPATH /usr/local/universalis
+ENV PROTOCOL_VAR ${protocol}
+ENV INTERVAL_VAR ${interval}
 
 USER universalis
-CMD ["/usr/local/bin/start-coordinator.sh"]
+CMD /usr/local/bin/start-coordinator.sh ${PROTOCOL_VAR} ${INTERVAL_VAR}
 
 EXPOSE 8888

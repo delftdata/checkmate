@@ -252,11 +252,9 @@ public class BidPersonAuctionSourceFunction extends Thread {
      public void generatePortionOfEpochEvents(long totalEpochEvents, long firstEventIndex, long eventsToGenerate,
                                               int currentIterationNumber) throws JsonProcessingException {
          int totalIdIncrease = this.getTotalIdIncrease(totalEpochEvents);
-         System.out.println("before next epoch settings");
          this.setNextEpochSettings(totalIdIncrease);
          int beforeIdIncrease = this.getTotalIdIncrease(firstEventIndex);
          this.incrementEventNumber(beforeIdIncrease);
-         System.out.println("before generate events");
          this.generateEvents(eventsToGenerate, currentIterationNumber);
      }
 
@@ -329,7 +327,6 @@ public class BidPersonAuctionSourceFunction extends Thread {
         
         Person person = PersonGenerator.nextPerson(eventId, rnd, eventTimestampMs, this.generatorConfig);
 
-        // int partition = (int) (person.id % uniPersonsPartitions);
         int partition = roundRobinPartitioner.nextInt(uniPersonsPartitions);
 
 
@@ -369,7 +366,6 @@ public class BidPersonAuctionSourceFunction extends Thread {
         
         Auction auction = AuctionGenerator.nextAuction(eventNumber, eventId, rnd, eventTimestampMs, this.generatorConfig);
 
-        // int partition = (int) (auction.id % uniAuctionsPartitions);
         int partition = roundRobinPartitioner.nextInt(uniAuctionsPartitions);
 
         try {
@@ -406,7 +402,6 @@ public class BidPersonAuctionSourceFunction extends Thread {
     public void produceBidEvent(long eventId, Random rnd, long eventTimestampMs, int uniBidsPartitions) throws JsonProcessingException{
         
         Bid bid = BidGenerator.nextBid(eventId, rnd, eventTimestampMs, this.generatorConfig);
-        // int partition = (int) (eventId % uniBidsPartitions);
         int partition = roundRobinPartitioner.nextInt(uniBidsPartitions);
 
         try {
