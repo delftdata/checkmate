@@ -5,7 +5,7 @@ from universalis.common.logging import logging
 
 from universalis.common.operator import StatefulFunction, Operator
 
-count_operator = Operator('count', n_partitions=6)
+count_operator = Operator('count', n_partitions=4)
 logging_time = 0
 
 

@@ -2,7 +2,6 @@ import asyncio
 import os
 import bisect
 import math
-import sys
 import time
 
 import aiozmq
@@ -11,7 +10,7 @@ import zmq
 
 from universalis.common.logging import logging
 from universalis.common.networking import NetworkingManager
-from universalis.common.serialization import Serializer, cloudpickle_deserialization
+from universalis.common.serialization import Serializer
 from minio import Minio
 
 from coordinator import Coordinator
@@ -24,13 +23,10 @@ MINIO_ACCESS_KEY: str = os.environ['MINIO_ROOT_USER']
 MINIO_SECRET_KEY: str = os.environ['MINIO_ROOT_PASSWORD']
 SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
-# CIC, UNC, COR
 
-CHECKPOINT_INTERVAL: int = 5
+class CoordinatorService(object):
 
-class CoordinatorService:
-
-    def __init__(self, checkpointing_protocol, checkpointing_interval):
+    def __init__(self, checkpointing_protocol: str, checkpointing_interval: int):
 
         self.networking = NetworkingManager()
         self.coordinator = Coordinator(WORKER_PORT)
@@ -57,8 +53,8 @@ class CoordinatorService:
         self.checkpointing_in_progress.clear()
 
         #checkpointing config
-        self.checkpointing_protocol = checkpointing_protocol
-        self.checkpointing_interval = checkpointing_interval
+        self.checkpointing_protocol: str = checkpointing_protocol
+        self.checkpointing_interval: int = checkpointing_interval
         self.networking.set_checkpoint_protocol(checkpointing_protocol)
         logging.warning(f"Checkpointing protocol set: {checkpointing_protocol}")
 
@@ -86,7 +82,7 @@ class CoordinatorService:
 
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
-        self.partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message, checkpointing_protocol=self.checkpointing_protocol, channel_list=self.channel_list)
+        self.partitions_to_ids = await self.coordinator.submit_stateflow_graph(self.networking, message)
         # For every channel, initialize a last_received to zero, to make sure checkpoints are replayed from offset 0.
         for operator_one in self.partitions_to_ids.keys():
             for operator_two in self.partitions_to_ids.keys():
@@ -101,13 +97,13 @@ class CoordinatorService:
         task = asyncio.create_task(coroutine)
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
-    
+
     async def find_recovery_line(self):
         marked_nodes = set()
 
         root_set_changed = True
 
-        while(root_set_changed):
+        while root_set_changed:
             root_set_changed = False
             # First iterate to create a set of all reachable nodes in the graph from the root set (mark all reachable nodes)
             for worker_id in self.recovery_graph_root_set.keys():
@@ -122,13 +118,13 @@ class CoordinatorService:
                     if (worker_id, op_name, snapshot_timestamp) in marked_nodes:
                         index = self.snapshot_timestamps[worker_id][op_name].index(snapshot_timestamp) - 1
                         if index < 0:
-                            logging.error("Even the first snapshot got marked, this should not be possible. Index smaller then zero.")
+                            logging.error("Even the first snapshot got marked, this should not be possible."
+                                          " Index smaller then zero.")
                         else:
                             self.useless_checkpoints += 1
                             # Replace it with the checkpoint before the marked one and repeat the process.
                             self.recovery_graph_root_set[worker_id][op_name] = int(self.snapshot_timestamps[worker_id][op_name][index])
                             root_set_changed = True
-
 
     # Recursive method to find all reachable nodes and add them to a set
     async def find_reachable_nodes(self, node, max_steps):
@@ -140,7 +136,7 @@ class CoordinatorService:
         for next_node in self.recovery_graph[node]:
             reachable_set = reachable_set.union(await self.find_reachable_nodes(next_node, max_steps-1))
         return reachable_set
-    
+
     async def send_restore_message(self):
         to_replay = await self.find_channels_to_replay()
 
@@ -273,7 +269,8 @@ class CoordinatorService:
                                         snt_index += 1
                                         continue
                                     
-                                    # If there is overlap in the intervals an edge should be created from the node at the beginning of the sent interval
+                                    # If there is overlap in the intervals an edge should be created from
+                                    # the node at the beginning of the sent interval
                                     # To the node at the end of the received interval.
                                     self.recovery_graph[(worker_id_snt, snt_op, int(snt_intervals[snt_index-1][1]))].add((worker_id_rec, rec_op, int(rec_intervals[rec_index][1])))
 
@@ -289,8 +286,8 @@ class CoordinatorService:
                                     else:
                                         snt_interval_start = snt_interval_end
                                         snt_index += 1
-                                
-                                # Now arrived at the last node, meaning that if the received is bigger than the sent, there are orphan messages.
+                                # Now arrived at the last node, meaning that if the received is bigger than the sent,
+                                # there are orphan messages.
                                 # This means that an edge should be added from the last sent to the last received.
                                 if rec_intervals[len(rec_intervals) - 1][0] > snt_intervals[len(snt_intervals) - 1][0]:
                                     self.recovery_graph[(worker_id_snt, snt_op, int(snt_intervals[len(snt_intervals) - 1][1]))].add((worker_id_rec, rec_op, int(rec_intervals[len(rec_intervals) - 1][1])))
@@ -315,7 +312,7 @@ class CoordinatorService:
         # Seems to work? (fingers crossed, will keep the warnings here just in case)
         #logging.warning(f'root set looks like: {self.recovery_graph_root_set}')
         #logging.warning(f'recovery graph: {self.recovery_graph}')
-        
+
     async def add_to_recovery_graph(self, snapshot_name):
         # Recovery graph looks like the following:
         # The nodes (keys) are the (worker_id, snapshot_time)
@@ -404,7 +401,7 @@ class CoordinatorService:
         try:
             if not self.minio_client.bucket_exists(SNAPSHOT_BUCKET_NAME):
                 self.minio_client.make_bucket(SNAPSHOT_BUCKET_NAME)
-        except:
+        except Exception:
             logging.warning("Unable to create minio bucket")
 
     async def main(self):
@@ -465,7 +462,7 @@ class CoordinatorService:
                             message, WORKER_PORT,
                             {
                                 "__COM_TYPE__": 'CHECKPOINT_PROTOCOL',
-                                "__MSG__": (self.checkpointing_protocol, CHECKPOINT_INTERVAL)
+                                "__MSG__": (self.checkpointing_protocol, self.checkpointing_interval)
                             },
                             Serializer.MSGPACK
                         )
@@ -479,7 +476,7 @@ class CoordinatorService:
                             logging.warning('All workers started processing.')
                             if self.checkpointing_protocol == 'COR':
                                 logging.warning('Coordinated checkpointing started.')
-                                self.create_task(self.coordinated_checkpointing(CHECKPOINT_INTERVAL))
+                                self.create_task(self.coordinated_checkpointing(self.checkpointing_interval))
                             self.create_task(self.get_metrics())
                     case 'RECOVERY_DONE':
                         self.recovery_done[message] = True
@@ -493,7 +490,7 @@ class CoordinatorService:
                             for id in self.done_checkpointing.keys():
                                 self.done_checkpointing[id] = False
                             self.checkpointing_in_progress.clear()
-                            self.can_checkpoint.set()                       
+                            self.can_checkpoint.set()
                     case 'COORDINATED_ROUND_DONE':
                         self.done_checkpointing[message[0]] = True
                         all_workers_done = True
@@ -542,5 +539,5 @@ class CoordinatorService:
 if __name__ == "__main__":
     uvloop.install()
     args = setup()
-    coordinator_service = CoordinatorService(args.checkpointing_protocol[0], args.checkpointing_interval)
+    coordinator_service = CoordinatorService(args.checkpointing_protocol[0], int(args.checkpointing_interval))
     asyncio.run(coordinator_service.main())

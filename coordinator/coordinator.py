@@ -16,7 +16,7 @@ class NotAStateflowGraph(Exception):
     pass
 
 
-class Coordinator:
+class Coordinator(object):
 
     def __init__(self, server_port: int):
         self.worker_counter: int = 0
@@ -32,21 +32,18 @@ class Coordinator:
                                      network_manager,
                                      stateflow_graph: StateflowGraph,
                                      ingress_type: IngressTypes = IngressTypes.KAFKA,
-                                     scheduler_type=None,
-                                     checkpointing_protocol='',
-                                     channel_list = []
-                                     ):
+                                     scheduler_type=None):
         if not isinstance(stateflow_graph, StateflowGraph):
             raise NotAStateflowGraph
         scheduler = RoundRobin()
         # Create kafka topic per worker
         if ingress_type == IngressTypes.KAFKA:
-            self.create_kafka_ingress_topics(stateflow_graph, self.workers.keys(), checkpointing_protocol, channel_list)
+            self.create_kafka_ingress_topics(stateflow_graph, self.workers.keys())
         # Return the following await, should contain operators/partitions per workerid
         return await scheduler.schedule(self.workers, stateflow_graph, network_manager)
 
     @staticmethod
-    def create_kafka_ingress_topics(stateflow_graph: StateflowGraph, workers, protocol, channel_list):
+    def create_kafka_ingress_topics(stateflow_graph: StateflowGraph, workers):
         kafka_url: str = os.getenv('KAFKA_URL', None)
         if kafka_url is None:
             logging.error('Kafka URL not given')
@@ -62,19 +59,6 @@ class Coordinator:
         for operator in stateflow_graph.nodes.values():
             partitions_per_operator[operator.name] = operator.n_partitions
             topics.append(NewTopic(name=operator.name, num_partitions=operator.n_partitions, replication_factor=1))
-        
-        # i*(j+1) + j
-        if protocol in ["CIC", "UNC"]:
-            for t in channel_list:
-                from_op, to_op, shuffle = t
-                if from_op is not None and to_op is not None:
-                    if shuffle:
-                        topic_partitions = partitions_per_operator[from_op] * partitions_per_operator[to_op]
-                    else:
-                        topic_partitions = partitions_per_operator[from_op]
-                    topic_name = from_op + to_op
-                    topics.append(NewTopic(name= topic_name, num_partitions=topic_partitions, replication_factor=1))
-                
         topics.append(NewTopic(name='universalis-egress', num_partitions=len(workers), replication_factor=1))
         try:
             client.create_topics(topics)

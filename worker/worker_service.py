@@ -1,10 +1,8 @@
 import asyncio
 import io
 import os
-import sys
 import time
 import random
-from timeit import default_timer as timer
 from math import ceil
 import concurrent.futures
 
@@ -19,7 +17,8 @@ from universalis.common.local_state_backends import LocalStateBackend
 from universalis.common.logging import logging
 from universalis.common.networking import NetworkingManager
 from universalis.common.operator import Operator
-from universalis.common.serialization import Serializer, compressed_cloudpickle_deserialization, compressed_cloudpickle_serialization, msgpack_serialization
+from universalis.common.serialization import (Serializer, pickle_deserialization,
+                                              pickle_serialization, msgpack_serialization)
 from universalis.common.kafka_producer_pool import KafkaProducerPool
 from universalis.common.kafka_consumer_pool import KafkaConsumerPool
 
@@ -114,8 +113,8 @@ class Worker(object):
                 incoming_channel = f"{send_from['operator_name']}_{payload.operator_name}_{tmp_str}"
                 async with self.last_message_processed_lock:
                     await self.checkpointing.set_last_messages_processed(payload.operator_name,
-                                                                        incoming_channel,
-                                                                        send_from['kafka_offset'])
+                                                                         incoming_channel,
+                                                                         send_from['kafka_offset'])
         success: bool = True
         operator_partition = self.registered_operators[(payload.operator_name, payload.partition)]
         response = await operator_partition.run_function(
@@ -125,7 +124,7 @@ class Worker(object):
             payload.function_name,
             payload.params
         )
-    
+
         # If exception we need to add it to the application logic aborts
         if isinstance(response, Exception):
             success = False
@@ -165,14 +164,13 @@ class Worker(object):
             secret_key=MINIO_SECRET_KEY, secure=False
         )
         # minio_client.trace_on(sys.stderr)
-        bytes_file: bytes = compressed_cloudpickle_serialization(snapshot_data)
+        bytes_file: bytes = pickle_serialization(snapshot_data)
         # logging.warning(f'finished compression of {snapshot_name}')
         minio_client.put_object(bucket_name=SNAPSHOT_BUCKET_NAME,
                                 object_name=snapshot_name,
                                 data=io.BytesIO(bytes_file),
                                 length=len(bytes_file))
-        
-        
+
         # logging.warning(f"{snapshot_name} send to minio.")
         if coordinator_info is not None:
             msg = message_encoder(
@@ -201,7 +199,7 @@ class Worker(object):
                 await asyncio.gather(*self.function_tasks)
                 self.function_tasks = set()
                 # Flush the current kafka message buffer from networking to make sure the messages are in Kafka.
-                last_messages_sent = await self.networking.flush_kafka_producer_pool(operator)
+                last_messages_sent = self.networking.return_last_offset(operator)
                 snapshot_data = {}
                 match self.checkpoint_protocol:
                     case 'UNC':
@@ -225,11 +223,15 @@ class Worker(object):
                                         'last_messages_sent': last_messages_sent,
                                         'snapshot_name': snapshot_name,
                                         'snapshot_duration': snapshot_duration}
-                    # logging.warning(f"snapshot_name: {snapshot_name}, coordinator_info: {coordinator_info}, snapshot_data: {snapshot_data}")
+                    # logging.warning(f"snapshot_name: {snapshot_name}, "
+                    #                 f"coordinator_info: {coordinator_info}, snapshot_data: {snapshot_data}")
                 loop = asyncio.get_running_loop()
-                loop.run_in_executor(pool, self.async_snapshot,
-                                     snapshot_name, snapshot_data, self.networking.encode_message, coordinator_info)\
-                                        .add_done_callback(self.update_network_sizes)
+                loop.run_in_executor(pool,
+                                     self.async_snapshot,
+                                     snapshot_name,
+                                     snapshot_data,
+                                     self.networking.encode_message,
+                                     coordinator_info).add_done_callback(self.update_network_sizes)
                 snapshot_end = time.time_ns() // 1000000
                 if snapshot_end - snapshot_start > 1000:
                     logging.warning(f'Operator: {operator}, Total time: {snapshot_end - snapshot_start}')
@@ -250,7 +252,7 @@ class Worker(object):
         ).data
         restoring_data = time.time_ns() // 1000000
         async with self.snapshot_state_lock:
-            deserialized_data = compressed_cloudpickle_deserialization(state_to_restore)
+            deserialized_data = pickle_deserialization(state_to_restore)
             self.local_state.data[operator_name] = deserialized_data['local_state_data']
         logging.warning(f'restoring snapshot data took: {(time.time_ns() // 1000000) - restoring_data}')
         last_kafka_consumed = {}
@@ -276,7 +278,6 @@ class Worker(object):
         for consumer in self.kafka_ingress_consumer_pool.consumer_pool.values():
             self.create_task(self.consumer_read(consumer))
 
-
     async def replay_from_kafka(self, operator_name, channel, offset):
         replay_until = await self.checkpointing.find_last_sent_offset(operator_name, channel)
         # logging.warning(f"replay_until: {replay_until}, offset: {offset}")
@@ -284,11 +285,11 @@ class Worker(object):
         # Create a kafka consumer for the given channel and seek the given offset.
         # For every kafka message, send over TCP without logging the message sent.
         count = 0
-        if(replay_until is not None and replay_until > offset):
+        if replay_until is not None and replay_until > offset:
             replay_consumer = AIOKafkaConsumer(bootstrap_servers=[KAFKA_URL])
             topic_partition = TopicPartition(sent_op+rec_op, int(partition))
             replay_consumer.assign([topic_partition])
-            while True: 
+            while True:
                 # start the kafka consumer
                 try:
                     await replay_consumer.start()
@@ -314,7 +315,6 @@ class Worker(object):
                 # logging.warning(f'Stopped consumer for channel {channel}')
         logging.warning(f"replayed {count} messages")
 
-
     async def replay_log_message(self, msg):
         deserialized_data: dict = self.networking.decode_message(msg.value)
         # logging.warning(f'replaying msg: {deserialized_data}')
@@ -333,7 +333,7 @@ class Worker(object):
             try:
                 await t
             except asyncio.CancelledError:
-                pass            
+                pass
         logging.warning("All function are canceled.")
         await self.networking.send_message(
             DISCOVERY_HOST, DISCOVERY_PORT,
@@ -343,7 +343,6 @@ class Worker(object):
             },
             Serializer.MSGPACK
         )
-        
 
     async def consumer_read(self, consumer: AIOKafkaConsumer):
         while True:
@@ -355,7 +354,6 @@ class Worker(object):
                     for message in messages:
                         self.handle_message_from_kafka(message)
             await asyncio.sleep(0.01)
-
 
     def handle_message_from_kafka(self, msg):
         logging.info(
@@ -407,7 +405,7 @@ class Worker(object):
         task = asyncio.create_task(coroutine)
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
-    
+
     def create_run_function_task(self, coroutine):
         task = asyncio.create_task(coroutine)
         self.function_tasks.add(task)
@@ -418,7 +416,6 @@ class Worker(object):
             from_op, to_op, shuffle = t
             if from_op is not None and to_op is not None:
                 self.channels[from_op + to_op] = shuffle
-
 
     async def checkpoint_coordinated_sources(self, pool, sources, _round):
         for source in sources:
@@ -467,8 +464,8 @@ class Worker(object):
 
                         if self.checkpoint_protocol == 'COR' and \
                                 await self.checkpointing.check_marker_received(message['__OP_NAME__'],
-                                                                            sender_details['sender_id'],
-                                                                            sender_details['operator_name']):
+                                                                               sender_details['sender_id'],
+                                                                               sender_details['operator_name']):
                             # logging.warning('Buffering message!')
                             self.message_buffer[message['__OP_NAME__']].append(message)
                         else:
@@ -479,7 +476,8 @@ class Worker(object):
                                 cycle_detected, cic_clock = await self.checkpointing.cic_cycle_detection(
                                     oper_name, message['__CIC_DETAILS__'])
                                 if cycle_detected:
-                                    logging.warning(f'Cycle detected for operator {oper_name}! Taking forced checkpoint.')
+                                    logging.warning(f'Cycle detected for operator {oper_name}!'
+                                                    f' Taking forced checkpoint.')
                                     # await self.networking.update_cic_checkpoint(oper_name)
                                     self.snapshot_event.clear()
                                     await self.take_snapshot(pool, message['__OP_NAME__'], cic_clock=cic_clock)
@@ -508,7 +506,9 @@ class Worker(object):
                 self.networking.set_channels(self.channels)
             case 'GET_METRICS':
                 logging.warning('METRIC REQUEST RECEIVED.')
-                return_value = (self.offsets_per_second, await self.networking.get_total_network_size(), await self.networking.get_protocol_network_size())
+                return_value = (self.offsets_per_second,
+                                await self.networking.get_total_network_size(),
+                                await self.networking.get_protocol_network_size())
                 reply = self.networking.encode_message(return_value, Serializer.MSGPACK)
                 self.router.write((resp_adr, reply))
             case 'TAKE_COORDINATED_CHECKPOINT':
@@ -536,7 +536,7 @@ class Worker(object):
                             },
                             Serializer.MSGPACK
                         )
-                        
+
             case 'RECOVER_FROM_SNAPSHOT':
                 logging.warning('Recovery message received.')
                 self.no_failure_event.clear()
@@ -549,7 +549,7 @@ class Worker(object):
                     try:
                         await t
                     except asyncio.CancelledError:
-                        pass            
+                        pass
                 logging.warning(f'function tasks size after canceling: {len(self.function_tasks)}')
                 logging.warning(f'stopping functions took: {(time.time_ns() // 1000000) - cleaning_running}')
 
@@ -575,7 +575,8 @@ class Worker(object):
                                 logging.warning(f"started_replaying {channel}")
                                 await self.replay_from_kafka(op_name, channel, message[op_name][1][channel])
                                 logging.warning(f"replayed channel {channel}")
-                            logging.warning(f"replaying messages took: {(time.time_ns() // 1000000) - replay_messages_start}")
+                            logging.warning(f"replaying messages took: "
+                                            f"{(time.time_ns() // 1000000) - replay_messages_start}")
                             await self.networking.send_message(
                                 DISCOVERY_HOST, DISCOVERY_PORT,
                                 {
@@ -608,7 +609,7 @@ class Worker(object):
                         logging.warning('Snapshot restore message received for unknown protocol, no restoration.')
                 self.snapshot_event.set()
                 self.no_failure_event.set()
-    
+
             # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
             case 'RECEIVE_EXE_PLN':
                 # This contains all the operators of a job assigned to this worker
@@ -635,7 +636,7 @@ class Worker(object):
             operator.attach_state_networking(self.local_state, self.networking, self.dns)
 
     async def send_throughputs(self):
-        while(True):
+        while True:
             await asyncio.sleep(1)
             offsets = await self.checkpointing.get_offsets()
             for operator in offsets.keys():
@@ -645,7 +646,6 @@ class Worker(object):
                     if part not in self.offsets_per_second[operator].keys():
                         self.offsets_per_second[operator][part] = []
                     self.offsets_per_second[operator][part].append(offsets[operator][part])
-
 
     async def handle_execution_plan(self, pool, message):
         worker_operators, self.dns, self.peers,\
@@ -699,7 +699,7 @@ class Worker(object):
             self.registered_operators[(operator.name, partition)] = operator
             if INGRESS_TYPE == 'KAFKA':
                 self.topic_partitions.append(TopicPartition(operator.name, partition))
-        await self.networking.start_kafka_logging_producer_pool()
+        self.networking.init_log_files(self.channel_list, list(self.registered_operators.keys()))
         self.create_task(self.start_kafka_consumer(self.topic_partitions))
         logging.info(
             f'Registered operators: {self.registered_operators} \n'
@@ -744,7 +744,6 @@ class Worker(object):
                     )
             else:
                 await asyncio.sleep(interval_randomness)
-
 
     async def start_tcp_service(self):
         self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")

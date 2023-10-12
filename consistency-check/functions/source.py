@@ -2,7 +2,7 @@ import random
 
 from universalis.common.operator import StatefulFunction, Operator
 
-source_operator = Operator('source', n_partitions=6)
+source_operator = Operator('source', n_partitions=4)
 
 
 @source_operator.register

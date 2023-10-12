@@ -1,32 +1,30 @@
 import asyncio
 import dataclasses
+import shutil
 import struct
 import socket
 import time
 import os
-import sys
+from typing import BinaryIO
 
 import zmq
 from aiozmq import create_zmq_stream, ZmqStream
-from aiokafka import AIOKafkaProducer
-from kafka.errors import KafkaConnectionError
-
-from universalis.common.kafka_producer_pool import KafkaProducerPool
 
 from .logging import logging
 from .serialization import Serializer, msgpack_serialization, msgpack_deserialization, \
     cloudpickle_serialization, cloudpickle_deserialization, pickle_serialization, pickle_deserialization
 
 KAFKA_URL: str = os.getenv('KAFKA_URL', None)
+LOG_PATH: str = '/usr/local/universalis/unc-logs'
 
 
 @dataclasses.dataclass
-class SocketConnection:
+class SocketConnection(object):
     zmq_socket: ZmqStream
     socket_lock: asyncio.Lock
 
 
-class SocketPool:
+class SocketPool(object):
 
     def __init__(self, host: str, port: int, size: int = 4):
         self.host = host
@@ -57,12 +55,10 @@ class SocketPool:
         self.conns = []
 
 
-class NetworkingManager:
-
-    kafka_producer: AIOKafkaProducer
+class NetworkingManager(object):
 
     def __init__(self):
-        self.pools: dict[tuple[str, int], SocketPool] = {}  # HERE BETTER TO ADD A CONNECTION POOL
+        self.pools: dict[tuple[str, int], SocketPool] = {}
         self.get_socket_lock = asyncio.Lock()
         self.get_last_message_lock = asyncio.Lock()
         self.host_name: str = str(socket.gethostbyname(socket.gethostname()))
@@ -79,10 +75,14 @@ class NetworkingManager:
         self.checkpointing = None
         self.checkpoint_protocol = None
 
-        self.kafka_logging_producer_pool = KafkaProducerPool(self.id, KAFKA_URL, size=100)
         self.message_logging = set()
 
-        self.channels = {}
+        self.channels: dict[str, bool] = {}
+
+        self.log_file_descriptors: dict[str, BinaryIO] = {}
+        self.log_file_offsets: dict[str, int] = {}
+        self.log_file_index: dict[str, list[str]] = {}
+        self.line_offsets: dict[str, dict[int, int]] = {}
 
     def set_channels(self, channel_dict):
         self.channels = channel_dict
@@ -110,45 +110,48 @@ class NetworkingManager:
             case _:
                 return 0
 
-    async def start_kafka_producer(self):
-        # Set the batch_size and linger_ms to a high number and use manual flushes to commit to kafka.
-        self.kafka_producer = AIOKafkaProducer(bootstrap_servers=[KAFKA_URL],
-                                               enable_idempotence=True,
-                                               acks='all')
-        while True:
-            try:
-                await self.kafka_producer.start()
-            except KafkaConnectionError:
-                time.sleep(1)
-                logging.info("Waiting for Kafka networking producer")
+    def init_log_files(self,
+                       channel_list: list[tuple[str, str, bool]],
+                       registered_operators: list[tuple[str, int]]):
+        # Create the log files and populate the log_file_descriptors and log_file_offsets
+        if os.path.exists(LOG_PATH):
+            shutil.rmtree(LOG_PATH)
+        os.makedirs(LOG_PATH)
+        for t in channel_list:
+            from_op, to_op, shuffle = t
+            if to_op is None or from_op not in self.total_partitions_per_operator:
+                # if it's sink it does not have log files
                 continue
-            break
-        logging.info('KAFKA PRODUCER STARTED FOR NETWORKING')
-
-    async def start_kafka_logging_producer_pool(self):
-        await self.kafka_logging_producer_pool.start()
-
-    async def start_kafka_logging_sync_producer_pool(self):
-        self.kafka_logging_producer_pool.start_sync()
-
-    async def flush_kafka_buffer(self, operator):
-        await self.kafka_producer.flush()
-        last_msg_sent = self.last_messages_sent[operator]
-        self.last_messages_sent[operator] = {}
-        return last_msg_sent
-
-    async def flush_kafka_producer_pool(self, operator):
-        kafka_flushes = [kafka_producer.flush() for kafka_producer in self.kafka_logging_producer_pool.producer_pool]
-        await asyncio.gather(*kafka_flushes)
-        kafka_flushes = []
-        await asyncio.gather(*self.message_logging)
-        self.message_logging = set()
-        last_msg_sent = self.last_messages_sent[operator]
-        self.last_messages_sent[operator] = {}
-        return last_msg_sent
-
-    async def stop_kafka_producer(self):
-        await self.kafka_producer.stop()
+            for i in range(self.total_partitions_per_operator[from_op]):
+                if (from_op, i) not in registered_operators:
+                    # if this operator partition is not in this worker, no need to create its log files
+                    continue
+                if shuffle:
+                    # The operator communicates with all the rest
+                    for j in range(self.total_partitions_per_operator[to_op]):
+                        file_name = f'{from_op}_{i}_{to_op}_{j}'
+                        file_path = os.path.join(LOG_PATH, file_name) + '.bin'
+                        self.log_file_descriptors[file_name] = open(file_path, 'ab+')
+                        self.log_file_offsets[file_name] = 0
+                        self.line_offsets[file_name] = {}
+                        if from_op in self.log_file_index:
+                            self.log_file_index[from_op].append(file_name)
+                        else:
+                            self.log_file_index[from_op] = [file_name]
+                else:
+                    # The operator communicates with only one
+                    if i >= self.total_partitions_per_operator[to_op]:
+                        # if this operator partition is not in this worker, no need to create its log files
+                        continue
+                    file_name = f'{from_op}_{i}_{to_op}_{i}'
+                    file_path = os.path.join(LOG_PATH, file_name) + '.bin'
+                    self.log_file_descriptors[file_name] = open(file_path, 'ab+')
+                    self.log_file_offsets[file_name] = 0
+                    self.line_offsets[file_name] = {}
+                    if from_op in self.log_file_index:
+                        self.log_file_index[from_op].append(file_name)
+                    else:
+                        self.log_file_index[from_op] = [file_name]
 
     async def set_total_partitions_per_operator(self, par_per_op):
         self.total_partitions_per_operator = par_per_op
@@ -171,26 +174,41 @@ class NetworkingManager:
         else:
             logging.warning('The socket that you are trying to close does not exist')
 
-    async def log_message(self,
-                          msg,
-                          send_part,
-                          send_name,
-                          rec_part,
-                          rec_name,
-                          serializer: Serializer = Serializer.PICKLE):
-        if self.channels[send_name+rec_name]:
-            logging_partition=send_part*(self.total_partitions_per_operator[rec_name]) + rec_part
-        else:
-            logging_partition=send_part
-        kafka_future = await self.kafka_logging_producer_pool.pick_producer(
-            logging_partition).send_and_wait(send_name+rec_name,
-                                             value=self.encode_message(msg, serializer),
-                                             partition=logging_partition)
-        channel_key = f'{send_name}_{rec_name}_{logging_partition}'
-        if channel_key not in self.last_messages_sent[send_name] or \
-                kafka_future.offset > self.last_messages_sent[send_name][channel_key]:
-            self.last_messages_sent[send_name][channel_key] = kafka_future.offset
-        return kafka_future.offset
+    def log_message(self,
+                    msg,
+                    send_part,
+                    send_name,
+                    rec_part,
+                    rec_name,
+                    serializer: Serializer = Serializer.PICKLE):
+        message = self.encode_message(msg, serializer)
+        logfile_name = f'{send_name}_{send_part}_{rec_name}_{rec_part}'
+        # log message to file
+        offset = self.log_file_descriptors[logfile_name].tell()
+        self.log_file_descriptors[logfile_name].write(message + b'\n')
+        self.log_file_descriptors[logfile_name].flush()
+        # increase the offset
+        self.line_offsets[logfile_name][self.log_file_offsets[logfile_name]] = offset
+        self.log_file_offsets[logfile_name] += 1
+        return self.log_file_offsets[logfile_name]
+
+    def log_seek(self,
+                 log_file_name,
+                 msg_offset):
+        file_offset = self.line_offsets[log_file_name][msg_offset]
+        self.log_file_descriptors[log_file_name].seek(file_offset)
+
+    def get_log_line(self,
+                     log_file_name):
+        return self.decode_message(self.log_file_descriptors[log_file_name].readline()[:-1])
+
+    def return_last_offset(self, operator) -> dict[str, int] | None:
+        if operator not in self.log_file_index:
+            # NOTE: check with recovery line (we might need to return 0 offsets)
+            return {}
+        file_names = self.log_file_index[operator]
+        last_offsets = {file_name: self.log_file_offsets[file_name] for file_name in file_names}
+        return last_offsets
 
     async def send_message(self,
                            host,
@@ -220,15 +238,11 @@ class NetworkingManager:
                 if self.checkpoint_protocol in ['UNC', 'CIC']:
                     receiving_name = msg['__MSG__']['__OP_NAME__']
                     receiving_partition = msg['__MSG__']['__PARTITION__']
-                    task = asyncio.create_task(self.log_message(msg,
-                                                                sending_partition,
-                                                                sending_name,
-                                                                receiving_partition,
-                                                                receiving_name))
-                    self.message_logging.add(task)
-                    task.add_done_callback(self.message_logging.discard)
-                    await task
-                    msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = task.result()
+                    msg['__MSG__']['__SENT_FROM__']['kafka_offset'] = self.log_message(msg,
+                                                                                       sending_partition,
+                                                                                       sending_name,
+                                                                                       receiving_partition,
+                                                                                       receiving_name)
                     if self.checkpoint_protocol == 'CIC':
                         msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host,
                                                                                                          port,
@@ -256,7 +270,6 @@ class NetworkingManager:
             new_msg = self.encode_message(msg, serializer)
             self.total_network_size += new_msg.__sizeof__()
             socket_conn.zmq_socket.write((new_msg, ))
-
 
     async def replay_message(self,
                              host,

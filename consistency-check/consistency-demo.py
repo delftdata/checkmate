@@ -65,7 +65,7 @@ async def main():
                 responses = await asyncio.gather(*tasks)
                 tasks=[]
                 time.sleep(sleep_time)
-            key = random.randint(0, 5)
+            key = random.randint(0, 3)
             tasks.append(universalis.send_kafka_event(operator=source_operator,
                                                   key=key,
                                                   function='read',
@@ -81,7 +81,7 @@ async def main():
 
     time.sleep(20)
     tasks = []
-    for key in range(0, 6):
+    for key in range(4):
         tasks.append(universalis.send_kafka_event(operator=count_operator,
                                            key=key,
                                            function="triggerLogging",
