@@ -375,8 +375,8 @@ class Worker(object):
                 self.notified_coordinator = True
                 self.create_task(self.notify_coordinator())
                 self.start_checkpointing.set()
-                # if self.id == 1:
-                #     self.create_task(self.simple_failure())
+                if self.id == 1:
+                    self.create_task(self.simple_failure())
 
             if message['__FUN_NAME__'] == 'trigger':
                 self.create_task(
@@ -609,9 +609,9 @@ class Worker(object):
                                 )
                     case _:
                         logging.warning('Snapshot restore message received for unknown protocol, no restoration.')
+            case 'GLOBAL_RECOVERY_DONE':
                 self.snapshot_event.set()
                 self.no_failure_event.set()
-
             # RECEIVE EXECUTION PLAN OF A DATAFLOW GRAPH
             case 'RECEIVE_EXE_PLN':
                 # This contains all the operators of a job assigned to this worker

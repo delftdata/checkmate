@@ -486,6 +486,17 @@ class CoordinatorService(object):
                         self.done_checkpointing[id] = False
                     self.checkpointing_in_progress.clear()
                     self.can_checkpoint.set()
+                    msg_tasks = []
+                    for worker_id in self.worker_ips.keys():
+                        msg_tasks.append(self.networking.send_message(
+                            self.worker_ips[worker_id], WORKER_PORT,
+                            {
+                                "__COM_TYPE__": 'GLOBAL_RECOVERY_DONE',
+                                "__MSG__": None
+                            },
+                            Serializer.MSGPACK
+                        ))
+                    await asyncio.gather(*msg_tasks)
             case 'COORDINATED_ROUND_DONE':
                 self.done_checkpointing[message[0]] = True
                 all_workers_done = True
