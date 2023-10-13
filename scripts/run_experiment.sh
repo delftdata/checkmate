@@ -15,7 +15,7 @@ elif [[ $query == "q3" || $query == "q8-running" ]]; then
 fi
 
 echo "generator exited"
-mkdir -p $saving_dir/$experiment
+mkdir -p $saving_dir/$experiment/figures
 python ./nexmark_queries/$query/kafka_input_consumer.py $saving_dir $experiment
 python ./nexmark_queries/$query/kafka_output_consumer.py $saving_dir $experiment
 sleep 10

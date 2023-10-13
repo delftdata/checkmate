@@ -5,10 +5,12 @@ import math
 import matplotlib.pyplot as plt
 
 
-protocol = sys.argv[1]
+saving_dir = sys.argv[1]
+experiment_name = sys.argv[2]
+# protocol = sys.argv[3]
 
-input_msgs = pd.read_csv(f'./results/q1/{protocol}-input.csv')
-output_msgs = pd.read_csv(f'./results/q1/{protocol}-output.csv')
+input_msgs = pd.read_csv(f'{saving_dir}/{experiment_name}/{experiment_name}-input.csv')
+output_msgs = pd.read_csv(f'{saving_dir}/{experiment_name}/{experiment_name}-output.csv')
 experiment_length= 60 # in seconds
 
 joined = pd.merge(input_msgs, output_msgs, on='request_id', how='outer')
@@ -32,6 +34,14 @@ print(f'25%: {np.percentile(runtime_no_nan, 25)}ms')
 print(f'10%: {np.percentile(runtime_no_nan, 10)}ms')
 print(np.argmax(runtime_no_nan))
 print(np.argmin(runtime_no_nan))
+
+
+input_sorted = input_msgs.sort_values("timestamp").reset_index() 
+output_sorted = output_msgs.sort_values("timestamp").reset_index() 
+total_messages = len(input_msgs.index)
+total_time = (output_sorted["timestamp"].iloc[-1] - input_sorted["timestamp"].iloc[0])/1_000
+print(f'average_throughput: {total_messages/total_time}')
+
 
 missed = joined[joined['response'].isna()]
 
@@ -79,7 +89,7 @@ handles, labels = plt.gca().get_legend_handles_labels()
 order = [1,0]
 
 ax.legend([handles[idx] for idx in order],[labels[idx] for idx in order],bbox_to_anchor=(0.5, -0.2), loc="center", ncol=2)
-ax.set_title(f"NexMark Q1 - {protocol}")
+ax.set_title(f"NexMark Q1 - {experiment_name}")
 plt.tight_layout()
 # plt.show()
-plt.savefig(f'results/q1/figures/{protocol}')
+plt.savefig(f'{saving_dir}/{experiment_name}/figures/{experiment_name}.pdf')
