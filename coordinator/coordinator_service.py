@@ -29,6 +29,7 @@ class CoordinatorService(object):
     def __init__(self, checkpointing_protocol: str, checkpointing_interval: int):
 
         self.networking = NetworkingManager()
+        self.router = None
         self.coordinator = Coordinator(WORKER_PORT)
         # background task references
         self.background_tasks = set()
@@ -79,6 +80,8 @@ class CoordinatorService(object):
         self.cor_start_time = 0
         self.amount_of_checkpoints = 0
         self.total_checkpoints_numbers = 0
+
+        self.puller_task = ...
 
     async def schedule_operators(self, message):
         # Store return value (operators/partitions per workerid)
@@ -374,14 +377,14 @@ class CoordinatorService(object):
         avg_cp_time = 0
         match self.checkpointing_protocol:
             case 'COR':
-                if self.amount_of_failures:
+                if not self.amount_of_failures:
                     self.total_checkpoints_numbers = self.checkpoint_round
                 if self.checkpoint_round > 0:
                     avg_cp_time = self.total_checkpointing_time / self.checkpoint_round
             case _:
-                if self.amount_of_failures:
+                if not self.amount_of_failures:
                     self.total_checkpoints_numbers = self.amount_of_checkpoints
-                if not self.amount_of_checkpoints:
+                if self.amount_of_checkpoints:
                     avg_cp_time = self.total_checkpointing_time / self.amount_of_checkpoints
         logging.warning(f'Average checkpointing time: {avg_cp_time}')
         logging.warning(f'Total network size: {total_network_size}, protocol size: {protocol_specific_size}')
@@ -404,136 +407,156 @@ class CoordinatorService(object):
         except Exception:
             logging.warning("Unable to create minio bucket")
 
-    async def main(self):
-        router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")  # coordinator
-        logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT}")
+    async def coordinator_controller(self, deserialized_data, resp_adr):
         # ADD DIFFERENT LOGIC FOR TESTING STATE RECOVERY
         # No while loop, but for example a simple sleep and recover message
         # self.create_task(self.test_snapshot_recovery())
+        message_type: str = deserialized_data['__COM_TYPE__']
+        message = deserialized_data['__MSG__']
+        match message_type:
+            case 'SEND_EXECUTION_GRAPH':
+                # Received execution graph from a universalis client
+                self.create_task(self.schedule_operators(message))
+                for op in message.nodes.keys():
+                    for id in self.worker_ips.keys():
+                        self.recovery_graph_root_set[id][op] = 0
+                        self.snapshot_timestamps[id][op] = [0]
+                        self.messages_to_replay[id][op] = {0: {}}
+                        self.recovery_graph[(id, op, 0)] = set()
+                        self.messages_received_intervals[id][op] = {}
+                        self.messages_sent_intervals[id][op] = {}
+                        self.messages_to_replay[id][op] = {}
+                logging.info("Submitted Stateflow Graph to Workers")
+            case 'SEND_CHANNEL_LIST':
+                self.channel_list = message
+                for worker_id in self.worker_ips.keys():
+                    await self.networking.send_message(
+                        self.worker_ips[worker_id], WORKER_PORT,
+                        {
+                            "__COM_TYPE__": 'SEND_CHANNEL_LIST',
+                            "__MSG__": message
+                        },
+                        Serializer.MSGPACK
+                    )
+            case 'REGISTER_WORKER':
+                # A worker registered to the coordinator
+                assigned_id = self.coordinator.register_worker(message)
+                self.worker_ips[str(assigned_id)] = message
+                reply = self.networking.encode_message(assigned_id, Serializer.MSGPACK)
+                self.router.write((resp_adr, reply))
+                self.recovery_graph_root_set[str(assigned_id)] = {}
+                self.snapshot_timestamps[str(assigned_id)] = {}
+                self.messages_received_intervals[str(assigned_id)] = {}
+                self.messages_sent_intervals[str(assigned_id)] = {}
+                self.messages_to_replay[str(assigned_id)] = {}
+                self.started_processing[assigned_id] = False
+                self.done_checkpointing[assigned_id] = False
+                self.recovery_done[assigned_id] = False
+                logging.info(f"Worker registered {message} with id {reply}")
+                await self.networking.send_message(
+                    message, WORKER_PORT,
+                    {
+                        "__COM_TYPE__": 'CHECKPOINT_PROTOCOL',
+                        "__MSG__": (self.checkpointing_protocol, self.checkpointing_interval)
+                    },
+                    Serializer.MSGPACK
+                )
+            case 'STARTED_PROCESSING':
+                self.started_processing[message] = True
+                start_checkpointing = True
+                for id in self.started_processing.keys():
+                    start_checkpointing = start_checkpointing and self.started_processing[id]
+                logging.warning(self.started_processing)
+                if start_checkpointing:
+                    logging.warning('All workers started processing.')
+                    if self.checkpointing_protocol == 'COR':
+                        logging.warning('Coordinated checkpointing started.')
+                        self.create_task(self.coordinated_checkpointing(self.checkpointing_interval))
+                    self.create_task(self.get_metrics())
+            case 'RECOVERY_DONE':
+                self.recovery_done[message] = True
+                all_workers_done = True
+                for id in self.recovery_done.keys():
+                    all_workers_done = all_workers_done and self.recovery_done[id]
+                if all_workers_done:
+                    self.total_recovery_time += ((time.time_ns() // 1000000) - self.failure_time)
+                    for id in self.recovery_done.keys():
+                        self.recovery_done[id] = False
+                    for id in self.done_checkpointing.keys():
+                        self.done_checkpointing[id] = False
+                    self.checkpointing_in_progress.clear()
+                    self.can_checkpoint.set()
+            case 'COORDINATED_ROUND_DONE':
+                self.done_checkpointing[message[0]] = True
+                all_workers_done = True
+                for id in self.done_checkpointing.keys():
+                    all_workers_done = all_workers_done and self.done_checkpointing[id]
+                if all_workers_done:
+                    self.total_checkpointing_time += ((time.time_ns() // 1000000) - self.cor_start_time)
+                    for id in self.done_checkpointing.keys():
+                        self.done_checkpointing[id] = False
+                    self.last_confirmed_checkpoint_round = message[1]
+                    logging.warning(f'Checkpointing round {message[1]} done')
+                    self.checkpointing_in_progress.clear()
+            case 'SNAPSHOT_TAKEN':
+                await self.process_snapshot_information(message)
+            case 'WORKER_FAILED':
+                self.can_checkpoint.clear()
+                # if we are in a checkpointing phase we need to reset everything.
+                if self.checkpointing_in_progress.is_set():
+                    self.checkpoint_round -= 1
+                    for id in self.done_checkpointing.keys():
+                        self.done_checkpointing[id] = False
+                    self.checkpointing_in_progress.clear()
+                self.failure_time = time.time_ns() // 1000000
+                self.amount_of_failures += 1
+                if self.checkpointing_protocol == 'COR':
+                    for worker_id in self.worker_ips.keys():
+                        await self.networking.send_message(
+                            self.worker_ips[worker_id], WORKER_PORT,
+                            {
+                                "__COM_TYPE__": 'RECOVER_FROM_SNAPSHOT',
+                                "__MSG__": self.last_confirmed_checkpoint_round
+                            },
+                            Serializer.MSGPACK
+                        )
+                    self.total_checkpoints_numbers = self.checkpoint_round
+                else:
+                    logging.warning('Worker failed! Find recovery line.')
+                    if self.checkpointing_protocol in ('COR', 'UNC', 'CIC'):
+                        await self.test_snapshot_recovery()
+                        self.total_checkpoints_numbers = self.amount_of_checkpoints
+            case _:
+                # Any other message type
+                logging.error(f"COORDINATOR SERVER: Non supported message type: {message_type}")
+
+    async def start_tcp_service(self):
+        self.puller_task = asyncio.create_task(self.start_puller())
+        self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{int(SERVER_PORT)+1}")
+        logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT} "
+                     f"IP:{self.networking.host_name}")
         while True:
-            resp_adr, data = await router.read()
+            # This is where we read from TCP, log at receiver
+            resp_adr, data = await self.router.read()
             deserialized_data: dict = self.networking.decode_message(data)
             if '__COM_TYPE__' not in deserialized_data:
                 logging.error("Deserialized data do not contain a message type")
             else:
-                message_type: str = deserialized_data['__COM_TYPE__']
-                message = deserialized_data['__MSG__']
-                match message_type:
-                    case 'SEND_EXECUTION_GRAPH':
-                        # Received execution graph from a universalis client
-                        self.create_task(self.schedule_operators(message))
-                        for op in message.nodes.keys():
-                            for id in self.worker_ips.keys():
-                                self.recovery_graph_root_set[id][op] = 0
-                                self.snapshot_timestamps[id][op] = [0]
-                                self.messages_to_replay[id][op] = {0: {}}
-                                self.recovery_graph[(id, op, 0)] = set()
-                                self.messages_received_intervals[id][op] = {}
-                                self.messages_sent_intervals[id][op] = {}
-                                self.messages_to_replay[id][op] = {}
-                        logging.info("Submitted Stateflow Graph to Workers")
-                    case 'SEND_CHANNEL_LIST':
-                        self.channel_list = message
-                        for worker_id in self.worker_ips.keys():
-                            await self.networking.send_message(
-                                self.worker_ips[worker_id], WORKER_PORT,
-                                {
-                                    "__COM_TYPE__": 'SEND_CHANNEL_LIST',
-                                    "__MSG__": message
-                                },
-                                Serializer.MSGPACK
-                            )
-                    case 'REGISTER_WORKER':
-                        # A worker registered to the coordinator
-                        assigned_id = self.coordinator.register_worker(message)
-                        self.worker_ips[str(assigned_id)] = message
-                        reply = self.networking.encode_message(assigned_id, Serializer.MSGPACK)
-                        router.write((resp_adr, reply))
-                        self.recovery_graph_root_set[str(assigned_id)] = {}
-                        self.snapshot_timestamps[str(assigned_id)] = {}
-                        self.messages_received_intervals[str(assigned_id)] = {}
-                        self.messages_sent_intervals[str(assigned_id)] = {}
-                        self.messages_to_replay[str(assigned_id)] = {}
-                        self.started_processing[assigned_id] = False
-                        self.done_checkpointing[assigned_id] = False
-                        self.recovery_done[assigned_id] = False
-                        logging.info(f"Worker registered {message} with id {reply}")
-                        await self.networking.send_message(
-                            message, WORKER_PORT,
-                            {
-                                "__COM_TYPE__": 'CHECKPOINT_PROTOCOL',
-                                "__MSG__": (self.checkpointing_protocol, self.checkpointing_interval)
-                            },
-                            Serializer.MSGPACK
-                        )
-                    case 'STARTED_PROCESSING':
-                        self.started_processing[message] = True
-                        start_checkpointing = True
-                        for id in self.started_processing.keys():
-                            start_checkpointing = start_checkpointing and self.started_processing[id]
-                        logging.warning(self.started_processing)
-                        if start_checkpointing:
-                            logging.warning('All workers started processing.')
-                            if self.checkpointing_protocol == 'COR':
-                                logging.warning('Coordinated checkpointing started.')
-                                self.create_task(self.coordinated_checkpointing(self.checkpointing_interval))
-                            self.create_task(self.get_metrics())
-                    case 'RECOVERY_DONE':
-                        self.recovery_done[message] = True
-                        all_workers_done = True
-                        for id in self.recovery_done.keys():
-                            all_workers_done = all_workers_done and self.recovery_done[id]
-                        if all_workers_done:
-                            self.total_recovery_time += ((time.time_ns() // 1000000) - self.failure_time)
-                            for id in self.recovery_done.keys():
-                                self.recovery_done[id] = False
-                            for id in self.done_checkpointing.keys():
-                                self.done_checkpointing[id] = False
-                            self.checkpointing_in_progress.clear()
-                            self.can_checkpoint.set()
-                    case 'COORDINATED_ROUND_DONE':
-                        self.done_checkpointing[message[0]] = True
-                        all_workers_done = True
-                        for id in self.done_checkpointing.keys():
-                            all_workers_done = all_workers_done and self.done_checkpointing[id]
-                        if all_workers_done:
-                            self.total_checkpointing_time += ((time.time_ns() // 1000000) - self.cor_start_time)
-                            for id in self.done_checkpointing.keys():
-                                self.done_checkpointing[id] = False
-                            self.last_confirmed_checkpoint_round = message[1]
-                            logging.warning(f'Checkpointing round {message[1]} done')
-                            self.checkpointing_in_progress.clear()
-                    case 'SNAPSHOT_TAKEN':
-                        await self.process_snapshot_information(message)
-                    case 'WORKER_FAILED':
-                        self.can_checkpoint.clear()
-                        # if we are in a checkpointing phase we need to reset everything.
-                        if self.checkpointing_in_progress.is_set():
-                            self.checkpoint_round -= 1
-                            for id in self.done_checkpointing.keys():
-                                self.done_checkpointing[id] = False
-                            self.checkpointing_in_progress.clear()
-                        self.failure_time = time.time_ns() // 1000000
-                        self.amount_of_failures += 1
-                        if self.checkpointing_protocol == 'COR':
-                            for worker_id in self.worker_ips.keys():
-                                await self.networking.send_message(
-                                    self.worker_ips[worker_id], WORKER_PORT,
-                                    {
-                                        "__COM_TYPE__": 'RECOVER_FROM_SNAPSHOT',
-                                        "__MSG__": self.last_confirmed_checkpoint_round
-                                    },
-                                    Serializer.MSGPACK
-                                )
-                            self.total_checkpoints_numbers = self.checkpoint_round
-                        else:
-                            logging.warning('Worker failed! Find recovery line.')
-                            if self.checkpointing_protocol in ('COR', 'UNC', 'CIC'):
-                                await self.test_snapshot_recovery()
-                                self.total_checkpoints_numbers = self.amount_of_checkpoints
-                    case _:
-                        # Any other message type
-                        logging.error(f"COORDINATOR SERVER: Non supported message type: {message_type}")
+                self.create_task(self.coordinator_controller(deserialized_data, resp_adr))
+
+    async def start_puller(self):
+        puller = await aiozmq.create_zmq_stream(zmq.PULL, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
+        while True:
+            # This is where we read from TCP, log at receiver
+            data = await puller.read()
+            deserialized_data: dict = self.networking.decode_message(data[0])
+            if '__COM_TYPE__' not in deserialized_data:
+                logging.error("Deserialized data do not contain a message type")
+            else:
+                self.create_task(self.coordinator_controller(deserialized_data, None))
+
+    async def main(self):
+        await self.start_tcp_service()
 
 
 if __name__ == "__main__":

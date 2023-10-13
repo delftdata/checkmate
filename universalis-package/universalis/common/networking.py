@@ -3,7 +3,6 @@ import dataclasses
 import shutil
 import struct
 import socket
-import time
 import os
 from typing import BinaryIO
 
@@ -32,27 +31,37 @@ class SocketPool(object):
         self.size = size
         self.conns: list[SocketConnection] = []
         self.index: int = 0
+        self.push_conns: list[ZmqStream] = []
+        self.push_index: int = 0
 
-    def __iter__(self):
-        return self
-
-    def __next__(self) -> SocketConnection:
+    def get_next_dealer_conn(self) -> SocketConnection:
         conn = self.conns[self.index]
         next_idx = self.index + 1
         self.index = 0 if next_idx == self.size else next_idx
         return conn
 
+    def get_next_push_conn(self) -> ZmqStream:
+        conn = self.push_conns[self.push_index]
+        next_idx = self.push_index + 1
+        self.push_index = 0 if next_idx == self.size else next_idx
+        return conn
+
     async def create_socket_connections(self):
         for _ in range(self.size):
-            soc = await create_zmq_stream(zmq.DEALER, connect=f"tcp://{self.host}:{self.port}")
+            soc = await create_zmq_stream(zmq.DEALER, connect=f"tcp://{self.host}:{int(self.port) + 1}")
             self.conns.append(SocketConnection(soc, asyncio.Lock()))
+            push_soc = await create_zmq_stream(zmq.PUSH, connect=f"tcp://{self.host}:{self.port}")
+            self.push_conns.append(push_soc)
 
     def close(self):
         for conn in self.conns:
             conn.zmq_socket.close()
             if conn.socket_lock.locked():
                 conn.socket_lock.release()
+        for conn in self.push_conns:
+            conn.close()
         self.conns = []
+        self.push_conns = []
 
 
 class NetworkingManager(object):
@@ -220,7 +229,7 @@ class NetworkingManager(object):
         async with self.get_socket_lock:
             if (host, port) not in self.pools:
                 await self.create_socket_connection(host, port)
-            socket_conn = next(self.pools[(host, port)])
+            socket_conn = self.pools[(host, port)].get_next_push_conn()
         sender_details = {
             'operator_name': sending_name,
             'operator_partition': sending_partition,
@@ -252,7 +261,7 @@ class NetworkingManager(object):
                         self.additional_cic_size += cloudpickle_serialization(msg['__MSG__']['__CIC_DETAILS__']).__sizeof__()
                 new_msg = self.encode_message(msg, serializer)
                 self.total_network_size += new_msg.__sizeof__()
-                socket_conn.zmq_socket.write((new_msg, ))
+                socket_conn.write((new_msg, ))
         elif msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':
             new_msg = self.encode_message(msg, serializer)
             self.total_network_size += new_msg.__sizeof__()
@@ -260,16 +269,16 @@ class NetworkingManager(object):
             logging.warning(f"snapshot_taken size:{size}")
             self.additional_uncoordinated_size += size
             self.additional_cic_size += size
-            socket_conn.zmq_socket.write((new_msg, ))
+            socket_conn.write((new_msg, ))
         elif msg['__COM_TYPE__'] in ['COORDINATED_MARKER', 'COORDINATED_ROUND_DONE', 'TAKE_COORDINATED_CHECKPOINT']:
             new_msg = self.encode_message(msg, serializer)
             self.total_network_size += new_msg.__sizeof__()
             self.additional_coordinated_size += new_msg.__sizeof__()
-            socket_conn.zmq_socket.write((new_msg, ))
+            socket_conn.write((new_msg, ))
         else:
             new_msg = self.encode_message(msg, serializer)
             self.total_network_size += new_msg.__sizeof__()
-            socket_conn.zmq_socket.write((new_msg, ))
+            socket_conn.write((new_msg, ))
 
     async def replay_message(self,
                              host,
@@ -280,7 +289,7 @@ class NetworkingManager(object):
         async with self.get_socket_lock:
             if (host, port) not in self.pools:
                 await self.create_socket_connection(host, port)
-            socket_conn = next(self.pools[(host, port)])
+            socket_conn = self.pools[(host, port)].get_next_push_conn()
         msg['__MSG__']['__CIC_DETAILS__'] = {}
         if self.checkpoint_protocol == 'CIC':
             msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host, port, msg['__MSG__']['__SENT_FROM__']['operator_name'], \
@@ -292,7 +301,7 @@ class NetworkingManager(object):
         elif self.checkpoint_protocol == 'UNC':
             self.additional_uncoordinated_size += msg.__sizeof__()
         self.total_network_size += msg.__sizeof__()
-        socket_conn.zmq_socket.write((msg, ))
+        socket_conn.write((msg, ))
 
     async def __receive_message(self, sock):
         # To be used only by the request response because the lock is needed
@@ -307,7 +316,7 @@ class NetworkingManager(object):
         async with self.get_socket_lock:
             if (host, port) not in self.pools:
                 await self.create_socket_connection(host, port)
-            socket_conn = next(self.pools[(host, port)])
+            socket_conn = self.pools[(host, port)].get_next_dealer_conn()
         async with socket_conn.socket_lock:
             await self.__send_message_given_sock(socket_conn.zmq_socket, msg, serializer)
             resp = await self.__receive_message(socket_conn.zmq_socket)

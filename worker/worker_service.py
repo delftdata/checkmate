@@ -99,6 +99,8 @@ class Worker(object):
 
         self.snapshot_taken_message_size = 0
 
+        self.puller_task = ...
+
     async def run_function(
             self,
             payload: RunFuncPayload,
@@ -179,7 +181,7 @@ class Worker(object):
                     "__MSG__": coordinator_info
                 },
                 Serializer.MSGPACK)
-            sync_socket_to_coordinator = zmq.Context().socket(zmq.DEALER)
+            sync_socket_to_coordinator = zmq.Context().socket(zmq.PUSH)
             sync_socket_to_coordinator.connect(f'tcp://{DISCOVERY_HOST}:{DISCOVERY_PORT}')
             sync_socket_to_coordinator.send(msg)
             sync_socket_to_coordinator.close()
@@ -746,14 +748,15 @@ class Worker(object):
                 await asyncio.sleep(interval_randomness)
 
     async def start_tcp_service(self):
-        self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
-        self.kafka_egress_producer_pool = KafkaProducerPool(self.id, KAFKA_URL, size=100)
-        await self.kafka_egress_producer_pool.start()
-        logging.info(
-            f"Worker TCP Server listening at 0.0.0.0:{SERVER_PORT} "
-            f"IP:{self.networking.host_name}"
-        )
         with concurrent.futures.ProcessPoolExecutor(1) as pool:
+            self.puller_task = asyncio.create_task(self.start_puller(pool))
+            self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{int(SERVER_PORT)+1}")
+            self.kafka_egress_producer_pool = KafkaProducerPool(self.id, KAFKA_URL, size=100)
+            await self.kafka_egress_producer_pool.start()
+            logging.info(
+                f"Worker TCP Server listening at 0.0.0.0:{SERVER_PORT} "
+                f"IP:{self.networking.host_name}"
+            )
             try:
                 while True:
                     # This is where we read from TCP, log at receiver
@@ -765,6 +768,17 @@ class Worker(object):
                         self.create_task(self.worker_controller(pool, deserialized_data, resp_adr))
             finally:
                 await self.kafka_egress_producer_pool.close()
+
+    async def start_puller(self, pool):
+        puller = await aiozmq.create_zmq_stream(zmq.PULL, bind=f"tcp://0.0.0.0:{SERVER_PORT}")
+        while True:
+            # This is where we read from TCP, log at receiver
+            data = await puller.read()
+            deserialized_data: dict = self.networking.decode_message(data[0])
+            if '__COM_TYPE__' not in deserialized_data:
+                logging.error("Deserialized data do not contain a message type")
+            else:
+                self.create_task(self.worker_controller(pool, deserialized_data, None))
 
     @staticmethod
     def unpack_run_payload(
