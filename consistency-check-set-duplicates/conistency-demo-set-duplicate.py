@@ -14,7 +14,7 @@ from functions.graph import source_operator
 from functions.graph import count_operator
 
 N_VALUES = 20000
-messages_per_second = 8000
+messages_per_second = 1000
 sleeps_per_second = 100
 sleep_time = 0.00085
 
@@ -55,7 +55,19 @@ async def main():
 
     tasks = []
     # SEND REQUESTS
-    value = 1
+    values = {0: 0, 1: 0, 2: 0, 3: 0}
+    # tasks.append(universalis.send_kafka_event(operator=source_operator,
+    #                                           key=1,
+    #                                           function='read',
+    #                                           params=(values[1],)))
+    # tasks.append(universalis.send_kafka_event(operator=source_operator,
+    #                                           key=2,
+    #                                           function='read',
+    #                                           params=(values[2],)))
+    # tasks.append(universalis.send_kafka_event(operator=source_operator,
+    #                                           key=3,
+    #                                           function='read',
+    #                                           params=(values[3],)))
     for _ in range(60):
         sec_start = timer()
         for i in range(messages_per_second):
@@ -64,10 +76,12 @@ async def main():
                 tasks = []
                 time.sleep(sleep_time)
             key = random.randint(0, 3)
+            # key = 0
             tasks.append(universalis.send_kafka_event(operator=source_operator,
                                                       key=key,
                                                       function='read',
-                                                      params=(value, )))
+                                                      params=(values[key], )))
+            values[key] += 1
         await asyncio.gather(*tasks)
         tasks = []
         sec_end = timer()
@@ -76,18 +90,18 @@ async def main():
             time.sleep(1 - lps)
         sec_end2 = timer()
         print(f'Latency per second: {sec_end2 - sec_start}')
-    print('Run done, waiting 15 seconds...')
-    time.sleep(15)
-    tasks = []
-    for key in range(4):
-        tasks.append(universalis.send_kafka_event(operator=count_operator,
-                                                  key=key,
-                                                  function="triggerLogging",
-                                                  params=(30.0, )
-                                                  ))
-    print('SENDING triggerLogging')
-    responses = await asyncio.gather(*tasks)
-    print(responses)
+    # print('Run done, waiting 15 seconds...')
+    # time.sleep(15)
+    # tasks = []
+    # for key in range(4):
+    #     tasks.append(universalis.send_kafka_event(operator=count_operator,
+    #                                               key=key,
+    #                                               function="triggerLogging",
+    #                                               params=(30.0, )
+    #                                               ))
+    # print('SENDING triggerLogging')
+    # responses = await asyncio.gather(*tasks)
+    # print(responses)
 
     await universalis.close()
     pd.DataFrame(timestamped_request_ids.items(), columns=['request_id', 'timestamp']).to_csv('client_requests.csv',

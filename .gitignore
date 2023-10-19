@@ -137,3 +137,5 @@ minio-volume
 
 *.png
 *.pdf
+
+unc_logs/

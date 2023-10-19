@@ -1,7 +1,4 @@
-FROM python:3.11.4-slim
-RUN apt-get update && apt-get install -y redis-server
-
-COPY worker/redis.conf /usr/local/etc/redis/redis.conf
+FROM python:3.11.6-slim
 
 RUN groupadd universalis \
     && useradd -m -d /usr/local/universalis -g universalis universalis

@@ -1,2 +1,2 @@
-class Stateless:
+class Stateless(object):
     pass

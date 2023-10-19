@@ -6,9 +6,9 @@ setuptools.setup(
     author="Kyriakos Psarakis",
     packages=setuptools.find_packages(),
     install_requires=[
-        'cloudpickle>=2.1.0,<3.0.0',
-        'msgspec>=0.15.1,<1.0.0',
-        'aiokafka>=0.7.2,<1.0',
+        'cloudpickle>=3.0.0,<4.0.0',
+        'msgspec>=0.18.4,<1.0.0',
+        'aiokafka>=0.8.1,<1.0',
     ],
-    python_requires='>=3.8',
+    python_requires='>=3.11',
 )

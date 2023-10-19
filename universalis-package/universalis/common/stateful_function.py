@@ -70,11 +70,11 @@ class StatefulFunction(Function):
 
     async def run(self, *args):
         raise NotImplementedError
-    
+
     @property
     def lock(self):
         return self.__state.get_lock(self.key, self.__operator_name)
-    
+
     @property
     def operator_lock(self):
         return self.__state.get_operator_lock(self.key, self.__operator_name)
@@ -91,10 +91,9 @@ class StatefulFunction(Function):
     async def get_operator_state(self):
         state = await self.__state.get_operator_state(self.__operator_name)
         return state
-    
-    async def clean_operator_state(self):
-            await self.__state.clean_operator_state(self.__operator_name)
 
+    async def clean_operator_state(self):
+        await self.__state.clean_operator_state(self.__operator_name)
 
     async def __send_async_calls(self):
         n_remote_calls: int = len(self.__async_remote_calls)

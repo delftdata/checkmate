@@ -1,12 +1,12 @@
 # networking service
-uvloop==0.17.0
-msgspec==0.16.0
-cloudpickle==2.2.1
-pyzmq==25.1.0
+uvloop==0.18.0
+msgspec==0.18.4
+cloudpickle==3.0.0
+pyzmq==25.1.1
 aiozmq==1.0.0
 # monitoring service
 # psutil==5.9.1
 # kafka
 kafka-python==2.0.2
 # snapshots
-minio==7.1.15
+minio==7.1.17

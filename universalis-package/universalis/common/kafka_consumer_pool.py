@@ -7,13 +7,13 @@ from universalis.common.logging import logging
 
 class KafkaConsumerPool(object):
 
-    def __init__(self, worker_id: int, kafka_url: str, topic_partitions: list[TopicPartition]):
-        self.worker_id = worker_id
-        self.kafka_url = kafka_url
-        self.topic_partitions = topic_partitions
-        self.size = len(topic_partitions)
+    def __init__(self, worker_id: int, kafka_url: str, topic_partitions: list[tuple[TopicPartition, int]]):
+        self.worker_id: int = worker_id
+        self.kafka_url: str = kafka_url
+        self.topic_partitions: list[tuple[TopicPartition, int]] = topic_partitions
+        self.size: int = len(topic_partitions)
         self.consumer_pool: dict[TopicPartition, AIOKafkaConsumer] = {}
-        self.index = 0
+        self.index: int = 0
 
     def __iter__(self):
         return self
@@ -25,14 +25,14 @@ class KafkaConsumerPool(object):
         return conn
 
     async def start(self):
-        for partition in self.topic_partitions:
-            self.consumer_pool[partition] = await self.start_kafka_ingress_consumer(partition)
+        for partition, offset in self.topic_partitions:
+            self.consumer_pool[partition] = await self.start_kafka_ingress_consumer(partition, offset)
 
     async def close(self):
         for consumer in self.consumer_pool.values():
             await consumer.stop()
 
-    async def start_kafka_ingress_consumer(self, partition):
+    async def start_kafka_ingress_consumer(self, partition, offset):
         kafka_ingress_consumer = AIOKafkaConsumer(
             bootstrap_servers=[self.kafka_url]
         )
@@ -40,6 +40,7 @@ class KafkaConsumerPool(object):
         while True:
             try:
                 await kafka_ingress_consumer.start()
+                kafka_ingress_consumer.seek(partition, offset)
             except KafkaConnectionError:
                 await asyncio.sleep(1)
                 logging.info("Waiting for Kafka")

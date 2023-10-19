@@ -23,30 +23,10 @@ services:
       - KAFKA_URL=kafka1:9092
       - DISCOVERY_HOST=coordinator
       - DISCOVERY_PORT=8888
+      - UNC_LOG_PATH=/usr/local/universalis/unc-logs
     env_file:
       - env-example/minio.env
-
-  # minio:
-  #   image: minio/minio:latest
-  #   container_name: minio-container
-  #   ports:
-  #     - "9001:9000"
-  #   volumes:
-  #     - minio_volume:/data
-  #   env_file:
-  #     - env-example/minio.env
-  #   command: server /mnt/data
-
-  # mc:
-  #   image: minio/mc:latest
-  #   hostname: minio_mc
-  #   entrypoint: >
-  #     /bin/sh -c "
-  #     until (/usr/bin/mc config host add myminio http://minio-container:9000 minio minio123) do echo '...waiting...' && sleep 1; done;
-  #     /usr/bin/mc admin trace myminio;
-  #     "
-  #   depends_on:
-  #     - minio
-
-# volumes:
-#   minio_volume: {}
+    volumes:
+      - type: 'bind'
+        source: './unc_logs'
+        target: '/usr/local/universalis/unc-logs'
