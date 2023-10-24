@@ -5,35 +5,16 @@ import numpy as np
 import math
 import matplotlib.pyplot as plt
 
-protocol = sys.argv[1]
+saving_dir = sys.argv[1]
+experiment_name = sys.argv[2]
 
-input_msgs = pd.read_csv(f'./results/q3/{protocol}-input.csv')
-output_msgs = pd.read_csv(f'./results/q3/{protocol}-output.csv')
+input_msgs = pd.read_csv(f'{saving_dir}/{experiment_name}/{experiment_name}-input.csv')
+output_msgs = pd.read_csv(f'{saving_dir}/{experiment_name}/{experiment_name}-output.csv')
 experiment_length = 60 # in seconds
 
 joined = pd.merge(input_msgs, output_msgs, on='request_id', how='outer')
 responded = joined.dropna().sort_values('timestamp_x').reset_index()
 responded = responded[responded['timestamp_x'] > (30000 + responded['timestamp_x'][0])].reset_index()
-
-# runtime = responded['timestamp_y'] - responded['timestamp_x']
-# print(responded)
-
-# print(f'min latency: {min(runtime)}ms')
-# print(f'max latency: {max(runtime)}ms')
-# print(f'average latency: {np.average(runtime)}ms')
-# print(f'99%: {np.percentile(runtime, 99)}ms')
-# print(f'95%: {np.percentile(runtime, 95)}ms')
-# print(f'90%: {np.percentile(runtime, 90)}ms')
-# print(f'75%: {np.percentile(runtime, 75)}ms')
-# print(f'60%: {np.percentile(runtime, 60)}ms')
-# print(f'50%: {np.percentile(runtime, 50)}ms')
-# print(f'25%: {np.percentile(runtime, 25)}ms')
-# print(f'10%: {np.percentile(runtime, 10)}ms')
-# print(np.argmax(runtime))
-# print(np.argmin(runtime))
-
-# missed = joined[joined['response'].isna()]
-# print(missed)
 
 
 start_time = -math.inf
@@ -62,22 +43,5 @@ for idx, t in enumerate(responded['timestamp_x']):
 latency_buckets_99: dict[int, float] = {k*100: np.percentile(v['items'], 99) for k, v in latency_buckets.items() if v['items'] != []}
 # latency_buckets_50: dict[int, float] = {k*100: np.percentile(v['items'], 50) for k, v in latency_buckets.items() if v['items'] != []}
 
-with open(f"./results/q3/{protocol}-99p.csv", "w") as fp:
+with open(f"{saving_dir}/{experiment_name}/{experiment_name}-99p.csv", "w") as fp:
     json.dump(latency_buckets_99, fp, indent=4)
-
-# # print(latency_buckets_50)
-# # print(latency_buckets_99)
-
-# _, ax = plt.subplots()
-# ax.plot(latency_buckets_99.keys(), latency_buckets_99.values(), linewidth=2.5, label='99p')
-# ax.plot(latency_buckets_50.keys(), latency_buckets_50.values(), linewidth=2.5, label='50p')
-# ax.set_xlabel('Time (ms)')
-# ax.set_ylabel('Latency (ms)')
-# handles, labels = plt.gca().get_legend_handles_labels()
-# order = [1,0]
-
-# ax.legend([handles[idx] for idx in order],[labels[idx] for idx in order],bbox_to_anchor=(0.5, -0.2), loc="center", ncol=2)
-# ax.set_title(f"NexMark Q3 - {protocol}")
-# plt.tight_layout()
-# # plt.show()
-# plt.savefig(f'results/q3/figures/{protocol}')

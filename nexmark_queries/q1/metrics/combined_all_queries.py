@@ -7,7 +7,9 @@ import matplotlib.pyplot as plt
 
 plt.rcParams.update({'font.size': 18})
 
-protocol_names = ["NC", "UNC", "COR", "CIC"]
+saving_dir = sys.argv[1]
+
+protocol_names = ["NOC", "UNC", "COR", "CIC"]
 queries = ["q1", "q3", "q8r", "q12r"]
 query_names = ["Q1", "Q3", "Q8", "Q12"]
 # query_settings = {
@@ -18,19 +20,19 @@ query_names = ["Q1", "Q3", "Q8", "Q12"]
 # }
 
 query_settings = {
-    "q1": ["NC-q1-35k-50p-no-fail", "UNC-q1-35k-50p-no-fail", "COR-q1-35k-50p-no-fail", "CIC-q1-35k-50p-no-fail"],
-    "q3": ["NC-q3-25k-50p-no-fail", "UNC-q3-25k-50p-no-fail", "COR-q3-25k-50p-no-fail", "CIC-q3-25k-50p-no-fail"],
-    "q8r": ["NC-q8r-15k-50p-no-fail", "UNC-q8r-15k-50p-no-fail", "COR-q8r-15k-50p-no-fail", "CIC-q8r-15k-50p-no-fail"],
-    "q12r": ["NC-q12r-15k-50p-no-fail", "UNC-q12r-15k-50p-no-fail", "COR-q12r-15k-50p-no-fail", "CIC-q12r-15k-50p-no-fail"]
+    "q1": ["NOC-q1-10w-15000r-nf", "UNC-q1-10w-15000r-nf", "COR-q1-10w-15000r-nf", "CIC-q1-10w-15000r-nf"],
+    "q3": ["NOC-q3-10w-10si-12000r-nf", "UNC-q3-10w-10si-12000r-nf", "COR-q3-10w-10si-12000r-nf", "CIC-q3-10w-10si-12000r-nf"],
+    "q8r": ["NOC-q8-10w-10si-12000r-nf", "UNC-q8-10w-10si-12000r-nf", "COR-q8-10w-10si-12000r-nf", "CIC-q8-10w-10si-12000r-nf"],
+    "q12r": ["NOC-q12-10w-10si-12000r-nf", "UNC-q12-10w-10si-12000r-nf", "COR-q12-10w-10si-12000r-nf", "CIC-q12-10w-10si-12000r-nf"]
 }
 
 fig, ax = plt.subplots(1,4, figsize=(25,5))
 
 for idx, q in enumerate(queries): 
-    fp_1 = open(f"./results/{q}/{query_settings[q][0]}-99p.csv", "r")
-    fp_2 = open(f"./results/{q}/{query_settings[q][1]}-99p.csv", "r")
-    fp_3 = open(f"./results/{q}/{query_settings[q][2]}-99p.csv", "r")
-    fp_4 = open(f"./results/{q}/{query_settings[q][3]}-99p.csv", "r")
+    fp_1 = open(f"{saving_dir}/{query_settings[q][0]}/{query_settings[q][0]}-99p.csv", "r")
+    fp_2 = open(f"{saving_dir}/{query_settings[q][1]}/{query_settings[q][1]}-99p.csv", "r")
+    fp_3 = open(f"{saving_dir}/{query_settings[q][2]}/{query_settings[q][2]}-99p.csv", "r")
+    fp_4 = open(f"{saving_dir}/{query_settings[q][3]}/{query_settings[q][3]}-99p.csv", "r")
 
     p99_1 = json.load(fp_1)
     p99_2 = json.load(fp_2)
@@ -69,4 +71,4 @@ fig.legend(handles, labels, bbox_to_anchor=(0.5, 0), loc="center", ncol=4)
 fig.tight_layout()
 # plt.show()
 
-fig.savefig('results/q1/figures/combined-all-99th.pdf', bbox_inches='tight')
+fig.savefig(f'{saving_dir}/{query_settings["q1"][0]}/figures/combined-all-99th.pdf', bbox_inches='tight')

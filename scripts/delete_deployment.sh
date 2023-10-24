@@ -1,3 +1,5 @@
+#!/bin/bash
+
 experiment=$1
 saving_dir=$2
 

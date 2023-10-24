@@ -1,3 +1,5 @@
+#!/bin/bash
+
 protocol=$1
 interval=$2
 scale_factor=$3

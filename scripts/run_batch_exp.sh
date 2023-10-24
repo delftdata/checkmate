@@ -1,3 +1,5 @@
+#!/bin/bash
+
 input=$1
 saving_dir=$2
 

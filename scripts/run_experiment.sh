@@ -1,3 +1,5 @@
+#!/bin/bash
+
 experiment=$1
 query=$2
 protocol=$3
