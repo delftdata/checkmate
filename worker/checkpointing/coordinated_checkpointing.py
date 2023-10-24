@@ -17,17 +17,17 @@ class CoordinatedCheckpointing(object):
         # Used to check whether the coordinator round is done
         self.sink_operators = {}
 
-    def set_id(self, id):
-        self.id = id
+    def set_id(self, _id):
+        self.id = _id
 
     def set_peers(self, peers):
         self.peers = peers
 
     def get_worker_id(self, host, port):
         worker_id = self.id
-        for id in self.peers.keys():
-            if (host, port) == self.peers[id]:
-                worker_id = id
+        for _id in self.peers.keys():
+            if (host, port) == self.peers[_id]:
+                worker_id = _id
                 break
         return worker_id
 
@@ -45,7 +45,7 @@ class CoordinatedCheckpointing(object):
     def process_channel_list(self, channel_list, worker_operators, partitions_to_ids):
         partitions_per_operator = {}
         for op, part in worker_operators:
-            if op.name not in partitions_per_operator.keys():
+            if op.name not in partitions_per_operator:
                 partitions_per_operator[op.name] = set()
             partitions_per_operator[op.name].add(part)
         for from_op, to_op, broadcast in channel_list:
@@ -59,22 +59,22 @@ class CoordinatedCheckpointing(object):
                 if to_op not in self.incoming_channels.keys():
                     self.incoming_channels[to_op] = {}
                 if broadcast:
-                    for id in self.peers.keys():
-                        self.outgoing_channels[from_op].add((id, to_op))
-                        self.incoming_channels[to_op][(id, from_op)] = False
+                    for _id in self.peers.keys():
+                        self.outgoing_channels[from_op].add((_id, to_op))
+                        self.incoming_channels[to_op][(_id, from_op)] = False
                 else:
                     channel_ids = set()
                     # First set all correct outgoing channels:
                     for part in partitions_per_operator[from_op]:
                         channel_ids.add(partitions_to_ids[to_op][str(part)])
-                    for id in channel_ids:
-                        self.outgoing_channels[from_op].add((id, to_op))
+                    for _id in channel_ids:
+                        self.outgoing_channels[from_op].add((_id, to_op))
                     channel_ids = set()
                     # Then set all correct incoming channels
                     for part in partitions_per_operator[to_op]:
                         channel_ids.add(partitions_to_ids[from_op][str(part)])
-                    for id in channel_ids:
-                        self.incoming_channels[to_op][(id, from_op)] = False
+                    for _id in channel_ids:
+                        self.incoming_channels[to_op][(_id, from_op)] = False
 
     def marker_received(self, message):
         sender_id, sender_operator, own_operator, _ = message
@@ -85,8 +85,6 @@ class CoordinatedCheckpointing(object):
             for channel in self.incoming_channels[own_operator].keys():
                 all_markers_received = all_markers_received and self.incoming_channels[own_operator][channel]
             if all_markers_received:
-                for channel in self.incoming_channels[own_operator].keys():
-                    self.incoming_channels[own_operator][channel] = False
                 return True
             else:
                 return False
@@ -94,12 +92,14 @@ class CoordinatedCheckpointing(object):
             logging.warning('received marker from non-incoming channel.')
             return False
 
+    def unblock_channels(self, operator_name):
+        for channel in self.incoming_channels[operator_name].keys():
+            self.incoming_channels[operator_name][channel] = False
+
     def check_marker_received(self, own_operator, sender_id, sender_op):
-        if own_operator in self.incoming_channels.keys():
-            if (sender_id, sender_op) in self.incoming_channels[own_operator].keys():
-                return self.incoming_channels[own_operator][(sender_id, sender_op)]
-        else:
-            return False
+        if own_operator in self.incoming_channels and (sender_id, sender_op) in self.incoming_channels[own_operator]:
+            return self.incoming_channels[own_operator][(sender_id, sender_op)]
+        return False
 
     def set_sink_operator(self, operator):
         # logging.warning(f'sink operators: {self.sink_operators}')

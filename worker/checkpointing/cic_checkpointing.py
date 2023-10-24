@@ -43,27 +43,27 @@ class CICCheckpointing(UncoordinatedCheckpointing):
         self.checkpoint_clocks[operator][self.id][operator] = self.checkpoint_clocks[operator][self.id][operator] + 1
         return self.logical_clock[operator]
 
-    async def get_worker_id(self, host, port):
+    def get_worker_id(self, host, port):
         worker_id = self.id
         for id in self.peers.keys():
             if (host, port) == self.peers[id]:
                 worker_id = id
                 break
         return worker_id
-    
-    async def get_cic_logical_clock(self, operator):
+
+    def get_cic_logical_clock(self, operator):
         return self.logical_clock[operator]
-    
-    async def get_message_details(self, host, port, sending_name, rec_name):
+
+    def get_message_details(self, host, port, sending_name, rec_name):
         details = {}
-        receiver_id = await self.get_worker_id(host, port)
+        receiver_id = self.get_worker_id(host, port)
         self.sent_to[sending_name][receiver_id][rec_name] = True
         details['__LC__'] = self.logical_clock[sending_name]
         details['__GREATER__'] = self.greater[sending_name]
         details['__TAKEN__'] = self.taken[sending_name]
         details['__CHECKPOINT_CLOCKS__'] = self.checkpoint_clocks[sending_name]
         return details
-    
+
     async def cic_cycle_detection(self, operator, cic_details):
         if cic_details == {}:
             return False, None
@@ -81,7 +81,7 @@ class CICCheckpointing(UncoordinatedCheckpointing):
             cycle_detected = True
 
         cic_clock = self.logical_clock[operator]
-        
+
         # Compare local clocks
 
         if cic_details['__LC__'] > self.logical_clock[operator]:

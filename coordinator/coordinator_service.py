@@ -604,7 +604,6 @@ class CoordinatorService(object):
 
 
 if __name__ == "__main__":
-    uvloop.install()
     args = setup()
     coordinator_service = CoordinatorService(args.checkpointing_protocol[0], int(args.checkpointing_interval))
-    asyncio.run(coordinator_service.main())
+    uvloop.run(coordinator_service.main())

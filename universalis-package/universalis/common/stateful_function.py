@@ -28,10 +28,13 @@ def make_key_hashable(key) -> int:
         return key
     elif isinstance(key, str):
         try:
-            return uuid.UUID(key).int  # uuid type given by the user
+            # uuid type given by the user
+            return uuid.UUID(key).int
         except ValueError:
-            return uuid.uuid5(uuid.NAMESPACE_DNS, key).int  # str that we hash to SHA-1
-    raise NonSupportedKeyType()  # if not int, str or uuid throw exception
+            # str that we hash to SHA-1
+            return uuid.uuid5(uuid.NAMESPACE_DNS, key).int
+    # if not int, str or uuid throw exception
+    raise NonSupportedKeyType()
 
 
 class StatefulFunction(Function):
@@ -43,7 +46,8 @@ class StatefulFunction(Function):
                  networking: NetworkingManager,
                  timestamp: int,
                  dns: dict[str, dict[str, tuple[str, int]]],
-                 request_id: str):
+                 request_id: str,
+                 partition: int):
         super().__init__()
         self.__operator_name = operator_name
         self.__state: State = operator_state
@@ -53,6 +57,7 @@ class StatefulFunction(Function):
         self.__request_id: str = request_id
         self.__async_remote_calls: list[tuple[str, str, object, tuple]] = []
         self.__key = key
+        self.__partition = partition
 
     async def __call__(self, *args, **kwargs):
         try:
@@ -121,16 +126,10 @@ class StatefulFunction(Function):
                                                serializer: Serializer = Serializer.MSGPACK):
         if isinstance(function_name, type):
             function_name = function_name.__name__
-        partition, payload, operator_host, operator_port = self.__prepare_message_transmission(operator_name,
-                                                                                               key,
-                                                                                               function_name,
-                                                                                               params)
-
-        sender_partition: int = make_key_hashable(self.__key) % len(self.__dns[operator_name].keys())
-        # if operator_name == "personsFilter":
-        #     logging.warning(f"sender partition: {sender_partition}")
-        #     logging.warning(f"self.__key: {self.__key}, self.__dns len: {len(self.__dns[operator_name].keys())}")
-
+        _, payload, operator_host, operator_port = self.__prepare_message_transmission(operator_name,
+                                                                                       key,
+                                                                                       function_name,
+                                                                                       params)
 
         await self.__networking.send_message(operator_host,
                                              operator_port,
@@ -138,7 +137,7 @@ class StatefulFunction(Function):
                                               "__MSG__": payload},
                                              serializer,
                                              sending_name=self.__operator_name,
-                                             sending_partition=sender_partition)
+                                             sending_partition=self.__partition)
 
     async def call_remote_function_request_response(self,
                                                     operator_name: str,

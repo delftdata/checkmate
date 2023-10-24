@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import io
 import shutil
 import struct
 import socket
@@ -86,17 +87,14 @@ class NetworkingManager(object):
         self.checkpointing = None
         self.checkpoint_protocol = None
 
-        self.message_logging = set()
-
-        self.channels: dict[str, bool] = {}
-
-        self.log_file_descriptors: dict[str, BinaryIO] = {}
+        self.log_file_descriptors: dict[str, BinaryIO | None] = {}
         self.log_file_offsets: dict[str, int] = {}
         self.log_file_index: dict[str, list[str]] = {}
         self.byte_offsets: dict[str, dict[int, tuple[int, int]]] = {}
 
-    def set_channels(self, channel_dict):
-        self.channels = channel_dict
+        self.log_file_paths: dict[str, str] = {}
+        self.recovery_cycle: int = 0
+        self.registered_ops = None
 
     def set_id(self, _id):
         self.id = _id
@@ -109,6 +107,9 @@ class NetworkingManager(object):
 
     def get_total_network_size(self):
         return self.total_network_size
+
+    def increment_recovery_cycle(self):
+        self.recovery_cycle += 1
 
     def get_protocol_network_size(self):
         if self.checkpoint_protocol == 'COR':
@@ -123,6 +124,9 @@ class NetworkingManager(object):
                        channel_list: list[tuple[str, str, bool]],
                        registered_operators: list[tuple[str, int]]):
         # Create the log files and populate the log_file_descriptors and log_file_offsets
+
+        self.registered_ops = registered_operators
+        
         worker_log_path = os.path.join(UNC_LOG_PATH, f'worker-{self.id}-logs')
         if os.path.exists(worker_log_path):
             shutil.rmtree(worker_log_path)
@@ -141,8 +145,8 @@ class NetworkingManager(object):
                     for j in range(self.total_partitions_per_operator[to_op]):
                         tmp_str = (i * self.total_partitions_per_operator[to_op] + j)
                         file_name = f'{from_op}_{to_op}_{tmp_str}'
-                        file_path = os.path.join(worker_log_path, file_name) + '.bin'
-                        self.log_file_descriptors[file_name] = open(file_path, 'ab+')
+                        self.log_file_paths[file_name] = os.path.join(worker_log_path, file_name) + '.bin'
+                        self.log_file_descriptors[file_name] = None
                         self.log_file_offsets[file_name] = 0
                         self.byte_offsets[file_name] = {}
                         if from_op in self.log_file_index:
@@ -156,14 +160,27 @@ class NetworkingManager(object):
                         continue
                     tmp_str = (i * self.total_partitions_per_operator[to_op] + i)
                     file_name = f'{from_op}_{to_op}_{tmp_str}'
-                    file_path = os.path.join(worker_log_path, file_name) + '.bin'
-                    self.log_file_descriptors[file_name] = open(file_path, 'ab+')
+                    self.log_file_paths[file_name] = os.path.join(worker_log_path, file_name) + '.bin'
+                    self.log_file_descriptors[file_name] = None
                     self.log_file_offsets[file_name] = 0
                     self.byte_offsets[file_name] = {}
                     if from_op in self.log_file_index:
                         self.log_file_index[from_op].append(file_name)
                     else:
                         self.log_file_index[from_op] = [file_name]
+        self.open_logfiles_for_append()
+
+    def close_logfiles(self):
+        for log_file in self.log_file_descriptors.values():
+            log_file.close()
+
+    def open_logfiles_for_read(self):
+        for log_file_name in self.log_file_descriptors:
+            self.log_file_descriptors[log_file_name] = open(self.log_file_paths[log_file_name], 'rb')
+
+    def open_logfiles_for_append(self):
+        for log_file_name in self.log_file_descriptors:
+            self.log_file_descriptors[log_file_name] = open(self.log_file_paths[log_file_name], 'ab')
 
     async def set_total_partitions_per_operator(self, par_per_op):
         self.total_partitions_per_operator = par_per_op
@@ -191,19 +208,28 @@ class NetworkingManager(object):
                     rec_part,
                     rec_name,
                     serializer: Serializer = Serializer.PICKLE):
-        message = self.encode_message(msg, serializer)
-        tmp_str = (send_part * self.total_partitions_per_operator[rec_name] + rec_part)
-        logfile_name = f'{send_name}_{rec_name}_{tmp_str}'
-        # log message to file
-        offset = self.log_file_descriptors[logfile_name].tell()
-        bytes_written = self.log_file_descriptors[logfile_name].write(message)
-        self.log_file_descriptors[logfile_name].flush()
-        # log the byte offsets of the message
-        self.byte_offsets[logfile_name][self.log_file_offsets[logfile_name]] = (offset, bytes_written)
-        # increase the message offset for the next message
-        offset = self.log_file_offsets[logfile_name]
-        self.log_file_offsets[logfile_name] += 1
-        return offset
+
+        try:
+            message = self.encode_message(msg, serializer)
+            tmp_str = (send_part * self.total_partitions_per_operator[rec_name] + rec_part)
+            logfile_name = f'{send_name}_{rec_name}_{tmp_str}'
+            # log message to file
+            offset = self.log_file_descriptors[logfile_name].tell()
+            try:
+                bytes_written = self.log_file_descriptors[logfile_name].write(message)
+            except io.UnsupportedOperation:
+                logging.warning('Should not have tried to write to the logs at recovery time')
+            else:
+                self.log_file_descriptors[logfile_name].flush()
+                # log the byte offsets of the message
+                self.byte_offsets[logfile_name][self.log_file_offsets[logfile_name]] = (offset, bytes_written)
+                # increase the message offset for the next message
+                offset = self.log_file_offsets[logfile_name]
+                self.log_file_offsets[logfile_name] += 1
+                return offset
+        except KeyError:
+            logging.warning(f'File: {logfile_name} does not exist in worker: {self.id} with operators:'
+                            f' {self.registered_ops} with message: {msg}')
 
     def log_seek(self,
                  log_file_name,
@@ -214,8 +240,15 @@ class NetworkingManager(object):
     def get_log_line(self,
                      log_file_name,
                      msg_offset):
-        return self.decode_message(self.log_file_descriptors[log_file_name].read(
-            self.byte_offsets[log_file_name][msg_offset][1]))
+        file_offset = self.byte_offsets[log_file_name][msg_offset][0]
+        self.log_file_descriptors[log_file_name].seek(file_offset)
+        try:
+            message = self.decode_message(self.log_file_descriptors[log_file_name].read(
+                self.byte_offsets[log_file_name][msg_offset][1]))
+        except io.UnsupportedOperation:
+            logging.warning('Should not have tried to read from the logs at non-recovery time')
+        else:
+            return message
 
     def return_last_offset(self, operator) -> dict[str, int] | None:
         if operator not in self.log_file_index:
@@ -249,6 +282,7 @@ class NetworkingManager(object):
         if msg['__COM_TYPE__'] == 'RUN_FUN_REMOTE':
             msg['__MSG__']['__SENT_FROM__'] = sender_details
             msg['__MSG__']['__SENT_TO__'] = receiver_details
+            msg['__MSG__']['__REC_CYC__'] = self.recovery_cycle
             if self.checkpoint_protocol in ['UNC', 'CIC']:
                 receiving_name = msg['__MSG__']['__OP_NAME__']
                 receiving_partition = msg['__MSG__']['__PARTITION__']
@@ -258,12 +292,13 @@ class NetworkingManager(object):
                                                                                    receiving_partition,
                                                                                    receiving_name)
                 if self.checkpoint_protocol == 'CIC':
-                    msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host,
-                                                                                                     port,
-                                                                                                     sending_name,
-                                                                                                     receiving_name)
+                    msg['__MSG__']['__CIC_DETAILS__'] = self.checkpointing.get_message_details(host,
+                                                                                               port,
+                                                                                               sending_name,
+                                                                                               receiving_name)
                     self.additional_cic_size += cloudpickle_serialization('__CIC_DETAILS__').__sizeof__()
-                    self.additional_cic_size += cloudpickle_serialization(msg['__MSG__']['__CIC_DETAILS__']).__sizeof__()
+                    self.additional_cic_size += cloudpickle_serialization(msg['__MSG__']
+                                                                          ['__CIC_DETAILS__']).__sizeof__()
             new_msg = self.encode_message(msg, serializer)
             self.total_network_size += new_msg.__sizeof__()
             socket_conn.write((new_msg, ))
@@ -299,8 +334,11 @@ class NetworkingManager(object):
         if self.checkpoint_protocol == 'CIC':
             msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host,
                                                                                              port,
-                                                                                             msg['__MSG__']['__SENT_FROM__']['operator_name'],
-                                                                                             msg['__MSG__']['__OP_NAME__'])
+                                                                                             msg['__MSG__']
+                                                                                             ['__SENT_FROM__']
+                                                                                             ['operator_name'],
+                                                                                             msg['__MSG__']
+                                                                                             ['__OP_NAME__'])
         msg = self.encode_message(msg, serializer)
         if self.checkpoint_protocol == 'CIC':
             self.additional_cic_size += msg.__sizeof__()

@@ -19,7 +19,8 @@ class Operator(BaseOperator):
         super().__init__(name, n_partitions)
         self.__state = None
         self.__networking = None
-        self.__dns: dict[str, dict[str, tuple[str, int]]] = {}  # where the other functions exist
+        # where the other functions exist
+        self.__dns: dict[str, dict[str, tuple[str, int]]] = {}
         self.__functions: dict[str, type] = {}
 
     @property
@@ -31,22 +32,24 @@ class Operator(BaseOperator):
                            request_id: bytes,
                            timestamp: int,
                            function_name: str,
-                           params: tuple) -> tuple[any, bool]:
+                           params: tuple,
+                           partition: int) -> tuple[any, bool]:
         logging.info(f'RQ_ID: {msgpack_deserialization(request_id)} function: {function_name}')
-        f = self.__materialize_function(function_name, key, request_id, timestamp)
+        f = self.__materialize_function(function_name, key, request_id, timestamp, partition)
         params = (f, ) + params
         resp = await f(*params)
         del f
         return resp
 
-    def __materialize_function(self, function_name, key, request_id, timestamp):
+    def __materialize_function(self, function_name, key, request_id, timestamp, partition):
         f = StatefulFunction(key,
                              self.name,
                              self.__state,
                              self.__networking,
                              timestamp,
                              self.__dns,
-                             request_id)
+                             request_id,
+                             partition)
         f.run = self.__functions[function_name]
         return f
 
