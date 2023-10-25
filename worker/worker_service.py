@@ -506,7 +506,7 @@ class Worker(object):
                         logging.info('CALLED RUN FUN FROM PEER')
                         if self.checkpoint_protocol == 'CIC':
                             # CHANGE TO CIC OBJECT
-                            cycle_detected, cic_clock = await self.checkpointing.cic_cycle_detection(
+                            cycle_detected, cic_clock = self.checkpointing.cic_cycle_detection(
                                 operator_name, message['__CIC_DETAILS__'])
                             if cycle_detected:
                                 logging.warning(f'Cycle detected for operator {operator_name}!'
@@ -714,7 +714,7 @@ class Worker(object):
         match self.checkpoint_protocol:
             case 'CIC':
                 self.checkpointing = CICCheckpointing()
-                await self.checkpointing.set_id(self.id)
+                self.checkpointing.set_id(self.id)
                 self.checkpointing.init_attributes_per_operator(self.total_partitions_per_operator.keys())
             case 'UNC':
                 self.checkpointing = UncoordinatedCheckpointing()
@@ -736,12 +736,12 @@ class Worker(object):
                 # CHANGE TO CIC OBJECT
                 await self.checkpointing.init_cic(self.total_partitions_per_operator.keys(), self.peers.keys())
                 for operator in self.total_partitions_per_operator.keys():
-                    await self.checkpointing.update_cic_checkpoint(operator)
+                    self.checkpointing.update_cic_checkpoint(operator)
                 del self.peers[self.id]
                 # START CHECKPOINTING DEPENDING ON PROTOCOL
                 self.create_task(self.communication_induced_checkpointing(pool, self.checkpoint_interval))
                 # CHANGE TO CIC OBJECT
-                await self.checkpointing.set_peers(self.peers)
+                self.checkpointing.set_peers(self.peers)
             case 'UNC':
                 del self.peers[self.id]
                 self.create_task(self.uncoordinated_checkpointing(pool, self.checkpoint_interval))
@@ -792,8 +792,8 @@ class Worker(object):
             last_snapshot_timestamp = self.checkpointing.get_last_snapshot_timestamp(operator)
             if not self.performing_recovery and self.can_start_checkpointing:
                 if current_time > last_snapshot_timestamp + (interval_randomness * 1000):
-                    await self.checkpointing.update_cic_checkpoint(operator)
-                    cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
+                    self.checkpointing.update_cic_checkpoint(operator)
+                    cic_clock = self.checkpointing.get_cic_logical_clock(operator)
                     self.snapshot_event.clear()
                     await self.take_snapshot(pool, operator, cic_clock=cic_clock)
                     self.snapshot_event.set()

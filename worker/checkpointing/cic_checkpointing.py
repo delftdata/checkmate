@@ -32,7 +32,7 @@ class CICCheckpointing(UncoordinatedCheckpointing):
                         self.greater[op][id][op2] = False
                         self.checkpoint_clocks[op][id][op2] = 0
 
-    async def update_cic_checkpoint(self, operator):
+    def update_cic_checkpoint(self, operator):
         for id in self.sent_to[operator].keys():
             for op in self.sent_to[operator][id].keys():
                 self.sent_to[operator][id][op] = False
@@ -64,7 +64,7 @@ class CICCheckpointing(UncoordinatedCheckpointing):
         details['__CHECKPOINT_CLOCKS__'] = self.checkpoint_clocks[sending_name]
         return details
 
-    async def cic_cycle_detection(self, operator, cic_details):
+    def cic_cycle_detection(self, operator, cic_details):
         if cic_details == {}:
             return False, None
         cycle_detected = False
@@ -77,7 +77,7 @@ class CICCheckpointing(UncoordinatedCheckpointing):
             if sent_greater_and:
                 break
         if (sent_greater_and and (cic_details['__LC__'] > self.logical_clock[operator])) or ((cic_details['__CHECKPOINT_CLOCKS__'][self.id][operator] == self.checkpoint_clocks[operator][self.id][operator]) and cic_details['__TAKEN__'][self.id][operator]):
-            await self.update_cic_checkpoint(operator)
+            self.update_cic_checkpoint(operator)
             cycle_detected = True
 
         cic_clock = self.logical_clock[operator]

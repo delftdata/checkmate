@@ -6,7 +6,7 @@ saving_dir=$2
 while IFS= read -r line
 do
   printf 'Run experiment: %s\n' "$line"
-  IFS=' ' read -ra ss <<< "$line"
+  IFS=',' read -ra ss <<< "$line"
   exp_name="${ss[0]}"
   query="${ss[1]}"
   protocol="${ss[2]}"
