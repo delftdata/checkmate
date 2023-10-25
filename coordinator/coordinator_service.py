@@ -14,7 +14,7 @@ from universalis.common.serialization import Serializer
 from minio import Minio
 
 from coordinator import Coordinator
-from setup import setup
+from config import config
 
 SERVER_PORT = WORKER_PORT = 8888
 
@@ -604,6 +604,6 @@ class CoordinatorService(object):
 
 
 if __name__ == "__main__":
-    args = setup()
+    args = config()
     coordinator_service = CoordinatorService(args.checkpointing_protocol[0], int(args.checkpointing_interval))
     uvloop.run(coordinator_service.main())

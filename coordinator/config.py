@@ -2,7 +2,7 @@ import argparse
 
 
 # Method to parse command-line arguments.
-def setup():
+def config():
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("-cp", "--checkpointing_protocol", help="Choose the checkpointing protocol to use.",
                                   choices=["COR", "UNC", "CIC", "NOC"],

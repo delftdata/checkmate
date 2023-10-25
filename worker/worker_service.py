@@ -1,6 +1,7 @@
 import asyncio
 import io
 import os
+import sys
 import time
 import random
 from math import ceil
@@ -23,6 +24,7 @@ from universalis.common.serialization import (Serializer, pickle_deserialization
 from universalis.common.kafka_producer_pool import KafkaProducerPool
 from universalis.common.kafka_consumer_pool import KafkaConsumerPool
 
+from worker.config import config
 from worker.operator_state.in_memory_state import InMemoryOperatorState
 from worker.operator_state.stateless import Stateless
 from worker.run_func_payload import RunFuncPayload
@@ -45,10 +47,11 @@ SNAPSHOT_BUCKET_NAME: str = "universalis-snapshots"
 
 class Worker(object):
 
-    def __init__(self):
+    def __init__(self, failure: bool = False):
         self.checkpoint_protocol = None
         self.checkpoint_interval = 5
         self.checkpointing = None
+        self.failure: bool = failure
 
         self.channel_list = None
 
@@ -84,7 +87,6 @@ class Worker(object):
 
         self.offsets_per_second = {}
 
-
         self.snapshot_taken_message_size = 0
 
         self.puller_task = ...
@@ -100,7 +102,6 @@ class Worker(object):
         # __OP_NAME__ + sender_details['sender_id'] + sender_details['operator_name']:
         # operator_name: Event that blocks the channel
         self.cor_channel_block_on_marker: dict[str, dict[str, asyncio.Event]] = {}
-
 
     async def run_function(
             self,
@@ -161,7 +162,7 @@ class Worker(object):
                 EGRESS_TOPIC_NAME,
                 key=payload.request_id,
                 value=msgpack_serialization(kafka_response),
-                partition=self.id-1
+                partition=self.id - 1
             ))
 
         return success
@@ -197,9 +198,9 @@ class Worker(object):
             sync_socket_to_coordinator.send(msg)
             sync_socket_to_coordinator.close()
             return msgpack_serialization({
-                    "__COM_TYPE__": 'SNAPSHOT_TAKEN',
-                    "__MSG__": coordinator_info
-                }).__sizeof__()
+                "__COM_TYPE__": 'SNAPSHOT_TAKEN',
+                "__MSG__": coordinator_info
+            }).__sizeof__()
         return 0
 
     # if you want to use this run it with self.create_task(self.take_snapshot())
@@ -259,6 +260,7 @@ class Worker(object):
                 # logging.warning(f"snapshot_name: {snapshot_name}, "
                 #                 f"coordinator_info: {coordinator_info}, snapshot_data: {snapshot_data}")
             loop = asyncio.get_running_loop()
+            # TODO Check the callback for correctness
             loop.run_in_executor(pool,
                                  self.async_snapshot,
                                  snapshot_name,
@@ -322,10 +324,10 @@ class Worker(object):
         logging.warning("Kafka Ingress Stopped")
 
     async def replay_from_log(self, operator_name, log_file_name, offset):
-        logging.warning(f'replay_from_log| operator_name: {operator_name},'
-                        f' log_file_name: {log_file_name}, offset: {offset}')
+        # logging.warning(f'replay_from_log| operator_name: {operator_name},'
+        #                 f' log_file_name: {log_file_name}, offset: {offset}')
         replay_until = self.checkpointing.find_last_sent_offset(operator_name, log_file_name)
-        logging.warning(f'replay_until: {replay_until}, offset: {offset}')
+        # logging.warning(f'replay_until: {replay_until}, offset: {offset}')
 
         if replay_until is not None and replay_until > offset:
             # The file descriptor remains open (need to change if we have container failures)
@@ -338,7 +340,7 @@ class Worker(object):
                 count += 1
                 message = self.networking.get_log_line(log_file_name, message_offset)
                 await self.replay_log_message(message, message_offset)
-            logging.warning(f"replayed {count} messages")
+            # logging.warning(f"replayed {count} messages")
 
     async def replay_log_message(self, deserialized_data, message_offset):
         # deserialized_data: dict = self.networking.decode_message(msg)
@@ -398,18 +400,26 @@ class Worker(object):
             if not self.can_start_checkpointing:
                 self.can_start_checkpointing = True
                 self.create_task(self.notify_coordinator())
-                if self.id == 1:
+                if self.id == 1 and self.failure:
                     self.create_task(self.simple_failure())
 
             await self.snapshot_event.wait()
             if self.checkpointing is not None:
                 self.checkpointing.set_consumed_offset(msg.topic, msg.partition, msg.offset)
 
-            self.create_run_function_task(
-                self.run_function(
-                    run_func_payload
+            if message['__FUN_NAME__'] == 'trigger':
+                self.create_task(
+                    self.run_function(
+                        run_func_payload
+                    )
                 )
-            )
+
+            else:
+                self.create_run_function_task(
+                    self.run_function(
+                        run_func_payload
+                    )
+                )
         else:
             logging.error(f"Invalid message type: {message_type} passed to KAFKA")
 
@@ -500,7 +510,6 @@ class Worker(object):
                                 operator_name, message['__CIC_DETAILS__'])
                             if cycle_detected:
                                 logging.warning(f'Cycle detected for operator {operator_name}!'
-
                                                 f' Taking forced checkpoint.')
                                 # await self.networking.update_cic_checkpoint(oper_name)
                                 self.snapshot_event.clear()
@@ -575,23 +584,23 @@ class Worker(object):
                     self.running_replayed.clear()
 
                 # STEP 1 -> STOP INGRESS
-                t_start_recover = timer()
+                # t_start_recover = timer()
                 await self.stop_kafka_consumer()
-                t_closed_ingress = timer()
-                logging.warning(f'Closing the ingress took: '
-                                f'{(t_closed_ingress - t_start_recover) * 1000}ms')
-                logging.warning(f'function tasks size before canceling: {len(self.function_tasks)}')
+                # t_closed_ingress = timer()
+                # logging.warning(f'Closing the ingress took: '
+                #                 f'{(t_closed_ingress - t_start_recover) * 1000}ms')
+                # logging.warning(f'function tasks size before canceling: {len(self.function_tasks)}')
                 # STEP 2 -> CLEAR RUNNING FUNCTIONS
                 await self.clear_function_tasks()
-                t_cleared_functions = timer()
-                logging.warning(f'function tasks size after canceling: {len(self.function_tasks)}')
-                logging.warning(f'stopping functions took: '
-                                f'{(t_cleared_functions - t_closed_ingress) * 1000}ms')
+                # t_cleared_functions = timer()
+                # logging.warning(f'function tasks size after canceling: {len(self.function_tasks)}')
+                # logging.warning(f'stopping functions took: '
+                #                 f'{(t_cleared_functions - t_closed_ingress) * 1000}ms')
                 # STEP 3 -> CLEAR NETWORK BUFFERS
                 await self.networking.close_all_connections()
-                t_cleared_networking = timer()
-                logging.warning(f'Clearing network buffers took: '
-                                f'{(t_cleared_networking - t_cleared_functions) * 1000}ms')
+                # t_cleared_networking = timer()
+                # logging.warning(f'Clearing network buffers took: '
+                #                 f'{(t_cleared_networking - t_cleared_functions) * 1000}ms')
                 if self.checkpoint_protocol in ['UNC', 'CIC']:
                     self.networking.close_logfiles()
                     self.networking.open_logfiles_for_read()
@@ -778,11 +787,11 @@ class Worker(object):
 
     async def cic_per_operator(self, pool, checkpoint_interval, operator):
         while True:
-            interval_randomness = random.randint(checkpoint_interval-1, checkpoint_interval+1)
+            interval_randomness = random.randint(checkpoint_interval - 1, checkpoint_interval + 1)
             current_time = time.time_ns() // 1_000_000
             last_snapshot_timestamp = self.checkpointing.get_last_snapshot_timestamp(operator)
             if not self.performing_recovery and self.can_start_checkpointing:
-                if current_time > last_snapshot_timestamp + (interval_randomness*1000):
+                if current_time > last_snapshot_timestamp + (interval_randomness * 1000):
                     await self.checkpointing.update_cic_checkpoint(operator)
                     cic_clock = await self.checkpointing.get_cic_logical_clock(operator)
                     self.snapshot_event.clear()
@@ -791,7 +800,7 @@ class Worker(object):
                     await asyncio.sleep(interval_randomness)
                 else:
                     await asyncio.sleep(
-                        ceil(((last_snapshot_timestamp + (checkpoint_interval*1000)) - current_time) / 1000)
+                        ceil(((last_snapshot_timestamp + (checkpoint_interval * 1000)) - current_time) / 1000)
                     )
             else:
                 await asyncio.sleep(interval_randomness)
@@ -799,7 +808,7 @@ class Worker(object):
     async def start_tcp_service(self):
         with concurrent.futures.ProcessPoolExecutor(1) as pool:
             self.puller_task = asyncio.create_task(self.start_puller(pool))
-            self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{int(SERVER_PORT)+1}",
+            self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{int(SERVER_PORT) + 1}",
                                                          high_read=0, high_write=0)
             self.kafka_egress_producer_pool = KafkaProducerPool(self.id, KAFKA_URL, size=100)
             await self.kafka_egress_producer_pool.start()
@@ -862,5 +871,6 @@ class Worker(object):
 
 
 if __name__ == "__main__":
-    worker = Worker()
-    uvloop.run(Worker().main())
+    args = config()
+    worker = Worker(args.failure)
+    uvloop.run(worker.main())

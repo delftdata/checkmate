@@ -2,7 +2,7 @@ import argparse
 
 
 # Method to parse command-line arguments.
-def setup():
+def config():
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("-r", "--rate", help="Provide the input rate.",
                                   default="1000",

@@ -115,7 +115,7 @@ class NetworkingManager(object):
         if self.checkpoint_protocol == 'COR':
             return self.additional_coordinated_size
         elif self.checkpoint_protocol == 'CIC':
-            return self.additional_coordinated_size
+            return self.additional_cic_size
         elif self.checkpoint_protocol == 'UNC':
             return self.additional_uncoordinated_size
         return 0
@@ -258,6 +258,7 @@ class NetworkingManager(object):
         last_offsets = {file_name: self.log_file_offsets[file_name] - 1 for file_name in file_names}
         return last_offsets
 
+    # TODO Change default serializer
     async def send_message(self,
                            host,
                            port,
@@ -296,28 +297,28 @@ class NetworkingManager(object):
                                                                                                port,
                                                                                                sending_name,
                                                                                                receiving_name)
-                    self.additional_cic_size += cloudpickle_serialization('__CIC_DETAILS__').__sizeof__()
-                    self.additional_cic_size += cloudpickle_serialization(msg['__MSG__']
-                                                                          ['__CIC_DETAILS__']).__sizeof__()
+                    # self.additional_cic_size += cloudpickle_serialization('__CIC_DETAILS__').__sizeof__()
+                    # self.additional_cic_size += cloudpickle_serialization(msg['__MSG__']
+                    #                                                       ['__CIC_DETAILS__']).__sizeof__()
             new_msg = self.encode_message(msg, serializer)
-            self.total_network_size += new_msg.__sizeof__()
+            # self.total_network_size += new_msg.__sizeof__()
             socket_conn.write((new_msg, ))
         elif msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':
             new_msg = self.encode_message(msg, serializer)
-            self.total_network_size += new_msg.__sizeof__()
-            size = new_msg.__sizeof__()
-            logging.warning(f"snapshot_taken size:{size}")
-            self.additional_uncoordinated_size += size
-            self.additional_cic_size += size
+            # self.total_network_size += new_msg.__sizeof__()
+            # size = new_msg.__sizeof__()
+            # logging.warning(f"snapshot_taken size:{size}")
+            # self.additional_uncoordinated_size += size
+            # self.additional_cic_size += size
             socket_conn.write((new_msg, ))
         elif msg['__COM_TYPE__'] in ['COORDINATED_MARKER', 'COORDINATED_ROUND_DONE', 'TAKE_COORDINATED_CHECKPOINT']:
             new_msg = self.encode_message(msg, serializer)
-            self.total_network_size += new_msg.__sizeof__()
-            self.additional_coordinated_size += new_msg.__sizeof__()
+            # self.total_network_size += new_msg.__sizeof__()
+            # self.additional_coordinated_size += new_msg.__sizeof__()
             socket_conn.write((new_msg, ))
         else:
             new_msg = self.encode_message(msg, serializer)
-            self.total_network_size += new_msg.__sizeof__()
+            # self.total_network_size += new_msg.__sizeof__()
             socket_conn.write((new_msg, ))
 
     async def replay_message(self,
@@ -340,11 +341,11 @@ class NetworkingManager(object):
                                                                                              msg['__MSG__']
                                                                                              ['__OP_NAME__'])
         msg = self.encode_message(msg, serializer)
-        if self.checkpoint_protocol == 'CIC':
-            self.additional_cic_size += msg.__sizeof__()
-        elif self.checkpoint_protocol == 'UNC':
-            self.additional_uncoordinated_size += msg.__sizeof__()
-        self.total_network_size += msg.__sizeof__()
+        # if self.checkpoint_protocol == 'CIC':
+        #     self.additional_cic_size += msg.__sizeof__()
+        # elif self.checkpoint_protocol == 'UNC':
+        #     self.additional_uncoordinated_size += msg.__sizeof__()
+        # self.total_network_size += msg.__sizeof__()
         socket_conn.write((msg, ))
 
     async def __receive_message(self, sock):
