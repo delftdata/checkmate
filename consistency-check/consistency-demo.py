@@ -35,8 +35,8 @@ async def main():
     # The boolean does not matter in these two cases
     channel_list = [
         (None, 'source', False),
-        ('source', 'count', False),
-        ('count', 'sink', False),
+        ('source', 'count', True),
+        ('count', 'sink', True),
         ('sink', None, False)
     ]
 

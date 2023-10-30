@@ -11,6 +11,8 @@ from universalis.nexmark.setup import setup
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
+from operators.bids_source import bids_source_operator
+from operators.sink import sink_operator
 from operators.count import count_operator
 from operators import q12_graph
 from operators.tumbling_window import tumbling_window_operator
@@ -40,6 +42,11 @@ async def main():
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
+    scale = int(args.bids_partitions)
+    bids_source_operator.set_partitions(scale)
+    count_operator.set_partitions(scale)
+    sink_operator.set_partitions(scale)
+    q12_graph.g.add_operators(bids_source_operator, count_operator, sink_operator)
     await universalis.submit(q12_graph.g)
 
     print('Graph submitted')
@@ -49,7 +56,7 @@ async def main():
 
     # START WINDOW TRIGGER
     tasks = []
-    for key in range(4):
+    for key in range(scale):
         tasks.append(universalis.send_kafka_event(operator=count_operator,
                                                   key=key,
                                                   function="trigger",

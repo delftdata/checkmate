@@ -2,16 +2,16 @@ import asyncio
 import random
 import subprocess
 import time
-import pandas as pd
-from timeit import default_timer as timer
 
 import uvloop
 from universalis.common.stateflow_ingress import IngressTypes
-from universalis.nexmark.setup import setup
+from universalis.nexmark.config import config
 from universalis.universalis import Universalis
-from universalis.common.logging import logging
 
-from operators import q1_graph
+from operators.bids_source import bids_source_operator
+from operators.currency_mapper import currency_mapper_operator
+from operators.sink import sink_operator
+from operators.q1_graph import g
 
 UNIVERSALIS_HOST: str = 'localhost'
 UNIVERSALIS_PORT: int = 8886
@@ -19,8 +19,7 @@ KAFKA_URL = 'localhost:9093'
 
 
 async def main():
-
-    args = setup()
+    args = config()
 
     universalis = Universalis(UNIVERSALIS_HOST, UNIVERSALIS_PORT,
                               ingress_type=IngressTypes.KAFKA,
@@ -41,29 +40,32 @@ async def main():
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
-    await universalis.submit(q1_graph.g)
+    scale = int(args.bids_partitions)
+    bids_source_operator.set_partitions(scale)
+    currency_mapper_operator.set_partitions(scale)
+    sink_operator.set_partitions(scale)
+    g.add_operators(bids_source_operator, currency_mapper_operator, sink_operator)
+    await universalis.submit(g)
 
     print('Graph submitted')
-
 
     time.sleep(60)
     # input("Press when you want to start producing.")
 
     subprocess.call(["java", "-jar", "nexmark/target/nexmark-generator-1.0-SNAPSHOT-jar-with-dependencies.jar",
-               "--generator-parallelism", "1",
-               "--enable-bids-topic", "true",
-               "--load-pattern", "static",
-               "--experiment-length", "1",
-               "--use-default-configuration", "false",
-               "--rate", args.rate,
-               "--max-noise", "0",
-               "--iteration-duration-ms", "90000",
-               "--kafka-server", "localhost:9093",
-               "--uni-bids-partitions", args.bids_partitions
-               ])
+                     "--generator-parallelism", "1",
+                     "--enable-bids-topic", "true",
+                     "--load-pattern", "static",
+                     "--experiment-length", "1",
+                     "--use-default-configuration", "false",
+                     "--rate", args.rate,
+                     "--max-noise", "0",
+                     "--iteration-duration-ms", "90000",
+                     "--kafka-server", "localhost:9093",
+                     "--uni-bids-partitions", args.bids_partitions
+                     ])
 
     await universalis.close()
-
 
 
 uvloop.install()

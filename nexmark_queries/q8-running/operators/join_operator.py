@@ -5,7 +5,7 @@ from universalis.common.logging import logging
 from universalis.common.operator import StatefulFunction, Operator
 from universalis.nexmark.entities import Auction, Entity, Person
 
-join_operator = Operator('join', n_partitions=10)
+join_operator = Operator('join')
 
 
 @join_operator.register

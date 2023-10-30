@@ -11,4 +11,3 @@ from .sink import sink_operator
 ####################################################################################################################
 g = StateflowGraph('nexmark_q1', operator_state_backend=LocalStateBackend.DICT)
 ####################################################################################################################
-g.add_operators(bids_source_operator, currency_mapper_operator, sink_operator)

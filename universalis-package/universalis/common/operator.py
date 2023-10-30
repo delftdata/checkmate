@@ -23,6 +23,9 @@ class Operator(BaseOperator):
         self.__dns: dict[str, dict[str, tuple[str, int]]] = {}
         self.__functions: dict[str, type] = {}
 
+    def set_partitions(self, partitions):
+        self.n_partitions = partitions
+
     @property
     def functions(self):
         return self.__functions

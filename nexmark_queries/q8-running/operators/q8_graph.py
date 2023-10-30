@@ -13,4 +13,3 @@ from .tumbling_window import tumbling_window_operator
 ####################################################################################################################
 g = StateflowGraph('nexmark_q8', operator_state_backend=LocalStateBackend.DICT)
 ####################################################################################################################
-g.add_operators(auctions_source_operator, persons_source_operator, join_operator, sink_operator)

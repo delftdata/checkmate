@@ -6,7 +6,7 @@ from universalis.common.serialization import Serializer
 from universalis.nexmark.entities import Auction, Entity
 
 
-tumbling_window_operator = Operator('tumblingWindow', n_partitions=10)
+tumbling_window_operator = Operator('tumblingWindow')
 
 @tumbling_window_operator.register
 async def add(ctx: StatefulFunction, item: Entity):

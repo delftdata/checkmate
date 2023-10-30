@@ -3,7 +3,7 @@ import time
 from universalis.common.operator import StatefulFunction, Operator
 from universalis.common.serialization import Serializer
 
-count_operator = Operator('count', n_partitions=4)
+count_operator = Operator('count')
 
 
 @count_operator.register

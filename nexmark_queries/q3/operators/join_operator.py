@@ -3,7 +3,7 @@ import random
 from universalis.common.operator import StatefulFunction, Operator
 from universalis.nexmark.entities import Auction, Entity, Person
 
-join_operator = Operator('join', n_partitions=10)
+join_operator = Operator('join')
 
 
 @join_operator.register
@@ -22,9 +22,10 @@ async def stateless_join(ctx: StatefulFunction, items: list):
     joined_result = []
     for lfit in left_items:
         for rgit in right_items:
-            joined_result.append((lfit, rgit, ))
+            joined_result.append((lfit, rgit,))
 
     return joined_result
+
 
 @join_operator.register
 async def stateful_join(ctx: StatefulFunction, item: Entity):
@@ -32,7 +33,7 @@ async def stateful_join(ctx: StatefulFunction, item: Entity):
         state = await ctx.get()
         # Init the state if it's empty:
         if state is None:
-             state = {'auctions': [], 'persons': []}
+            state = {'auctions': [], 'persons': []}
 
         if isinstance(item, Auction):
             state['auctions'].append(item.to_tuple())
@@ -43,21 +44,20 @@ async def stateful_join(ctx: StatefulFunction, item: Entity):
 
     if isinstance(item, Auction):
         for person in state['persons']:
-                joined_row = (item.to_tuple(), person,)
-                await ctx.call_remote_function_no_response(
-                    operator_name='sink',
-                    function_name='output',
-                    key=ctx.key,
-                    params=(joined_row,)
-                )
+            joined_row = (item.to_tuple(), person,)
+            await ctx.call_remote_function_no_response(
+                operator_name='sink',
+                function_name='output',
+                key=ctx.key,
+                params=(joined_row,)
+            )
 
     elif isinstance(item, Person):
         for auction in state['auctions']:
-                joined_row = (item.to_tuple(), auction, )
-                await ctx.call_remote_function_no_response(
-                    operator_name='sink',
-                    function_name='output',
-                    key=ctx.key,
-                    params=(joined_row,)
-                )
-
+            joined_row = (item.to_tuple(), auction,)
+            await ctx.call_remote_function_no_response(
+                operator_name='sink',
+                function_name='output',
+                key=ctx.key,
+                params=(joined_row,)
+            )

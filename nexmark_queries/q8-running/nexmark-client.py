@@ -7,6 +7,9 @@ from universalis.common.stateflow_ingress import IngressTypes
 from universalis.nexmark.setup import setup
 from universalis.universalis import Universalis
 
+from operators.auctions_source import auctions_source_operator
+from operators.persons_source import persons_source_operator
+from operators.sink import sink_operator
 from operators.join_operator import join_operator
 from operators import q8_graph
 
@@ -36,6 +39,12 @@ async def main():
     ####################################################################################################################
     # SUBMIT STATEFLOW GRAPH ###########################################################################################
     ####################################################################################################################
+    scale = int(args.persons_partitions)
+    auctions_source_operator.set_partitions(scale)
+    persons_source_operator.set_partitions(scale)
+    join_operator.set_partitions(scale)
+    sink_operator.set_partitions(scale)
+    q8_graph.g.add_operators(auctions_source_operator, persons_source_operator, join_operator, sink_operator)
     await universalis.submit(q8_graph.g)
 
     print('Graph submitted')
@@ -45,7 +54,7 @@ async def main():
 
     # START WINDOW TRIGGER
     tasks = []
-    for key in range(0, 10):
+    for key in range(0, scale):
         tasks.append(universalis.send_kafka_event(operator=join_operator,
                                                   key=key,
                                                   function="trigger",
