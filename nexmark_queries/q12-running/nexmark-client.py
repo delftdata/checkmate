@@ -7,7 +7,7 @@ from timeit import default_timer as timer
 
 import uvloop
 from universalis.common.stateflow_ingress import IngressTypes
-from universalis.nexmark.setup import setup
+from universalis.nexmark.config import config
 from universalis.universalis import Universalis
 from universalis.common.logging import logging
 
@@ -23,7 +23,7 @@ KAFKA_URL = 'localhost:9093'
 
 
 async def main():
-    args = setup()
+    args = config()
 
     universalis = Universalis(UNIVERSALIS_HOST, UNIVERSALIS_PORT,
                               ingress_type=IngressTypes.KAFKA,

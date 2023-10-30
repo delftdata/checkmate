@@ -121,6 +121,8 @@ import java.util.*;
  *                best generator-performance.
  *          generatorParallelism (1): Int
  *                Amount of threads that running simultaneously while generating data. Default value: 1.
+ *          skew (False): Boolean
+ *                Existance of skew in the generated input.
  *
  *    Other
  *      Optional parameters
@@ -190,6 +192,9 @@ public class BidPersonGeneratorKafka {
         int uniPersonsPartitions = params.getInt("uni-persons-partitions", 6);
         int uniAuctionsPartitions = params.getInt("uni-auctions-partitions", 6);
 
+        //Skew
+        boolean skew = params.getBoolean("skew", false);
+
         Set<String> remainingParameters = params.getUnrequestedParameters();
         if (remainingParameters.size() > 0) {
             System.out.println("Warning: did not recognize the following parameters: " + String.join(",", remainingParameters));
@@ -205,7 +210,7 @@ public class BidPersonGeneratorKafka {
 
         BidPersonAuctionSourceParallelManager sourceManager = new BidPersonAuctionSourceParallelManager(kafkaServer,
                 epochDurationMs, personTopicEnabled, auctionTopicEnabled, bidsTopicEnabled, generatorParallelism, 
-                uniBidsPartitions, uniAuctionsPartitions, uniPersonsPartitions);
+                uniBidsPartitions, uniAuctionsPartitions, uniPersonsPartitions, skew);
 
         // Starting iteration
         long start_time = System.currentTimeMillis();

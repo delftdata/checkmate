@@ -33,14 +33,15 @@ public class BidPersonAuctionSourceParallelManager {
                                                  int parallelism,
                                                  int uniBidsPartitions,
                                                  int uniAuctionsPartitions,
-                                                 int uniPersonsPartitions) {
+                                                 int uniPersonsPartitions,
+                                                 boolean skew) {
         this.parallelism = parallelism;
         this.epochDurationMs = epochDurationMs;
         this.sourceFunctions = new ArrayList<>();
         for (int i = 0; i < this.parallelism; i++) {
             this.sourceFunctions.add(new BidPersonAuctionSourceParallelFunction(kafkaServer, epochDurationMs,
                     enablePersonTopic, enableAuctionTopic, enableBidTopic, parallelism, i,
-                    uniBidsPartitions, uniAuctionsPartitions, uniPersonsPartitions));
+                    uniBidsPartitions, uniAuctionsPartitions, uniPersonsPartitions, skew));
         }
     }
 

@@ -71,7 +71,8 @@ public class BidPersonAuctionSourceFunction extends Thread {
                                           boolean enableBidTopic,
                                           int uniBidsPartitions, 
                                           int uniAuctionsPartitions, 
-                                          int uniPersonsPartitions){
+                                          int uniPersonsPartitions,
+                                          boolean skew){
         // Create producer
         if (kafkaServer != null) {
             // Not in testing environment
@@ -93,9 +94,17 @@ public class BidPersonAuctionSourceFunction extends Thread {
         NexmarkConfiguration nexmarkConfiguration = NexmarkConfiguration.DEFAULT;
         // Set hot ratio to 1 to prevent possible skew. Chance of getting a hot item is 1 - 1 / ratio.
         // Setting it to 1 disables picking hot values.
-        nexmarkConfiguration.hotAuctionRatio = 1;
-        nexmarkConfiguration.hotBiddersRatio = 1;
-        nexmarkConfiguration.hotSellersRatio = 1;
+        if (skew){        
+            nexmarkConfiguration.hotAuctionRatio = 2;
+            nexmarkConfiguration.hotBiddersRatio = 2;
+            nexmarkConfiguration.hotSellersRatio = 2;
+        }
+        else{
+            nexmarkConfiguration.hotAuctionRatio = 1;
+            nexmarkConfiguration.hotBiddersRatio = 1;
+            nexmarkConfiguration.hotSellersRatio = 1;
+        }
+
         this.generatorConfig = new GeneratorConfig(
                 nexmarkConfiguration,
                 1,

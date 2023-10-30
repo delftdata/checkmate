@@ -14,8 +14,9 @@ do
   scale_factor="${ss[4]}"
   rate="${ss[5]}"
   failure="${ss[6]}"
+  skew="${ss[7]}"
 
   ./scripts/run_experiment.sh "$exp_name" "$query" "$protocol" "$interval" "$scale_factor" "$rate" "$saving_dir" \
-                              "$failure"
+                              "$failure" "$skew"
 
 done < "$input"

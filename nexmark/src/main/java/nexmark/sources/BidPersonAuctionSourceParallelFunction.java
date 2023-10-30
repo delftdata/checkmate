@@ -29,14 +29,26 @@ public class BidPersonAuctionSourceParallelFunction extends BidPersonAuctionSour
      * @param parallelism The total amount of BidPersonAuctionSource functions.
      * @param parallelismIndex The ID / index of the instantiation of the function. Should be between [0, parallelism-1]
      */
-    public BidPersonAuctionSourceParallelFunction(String kafkaServer, long epochDurationMs, boolean enablePersonTopic, boolean enableAuctionTopic, boolean enableBidTopic, int parallelism, int parallelismIndex,
-            int uniBidsPartitions, int uniAuctionsPartitions, int uniPersonsPartitions) {
-        super(kafkaServer, epochDurationMs, enablePersonTopic, enableAuctionTopic, enableBidTopic, uniBidsPartitions, uniAuctionsPartitions, uniPersonsPartitions);
+    public BidPersonAuctionSourceParallelFunction(
+        String kafkaServer,
+        long epochDurationMs, 
+        boolean enablePersonTopic, 
+        boolean enableAuctionTopic, 
+        boolean enableBidTopic, 
+        int parallelism, 
+        int parallelismIndex,
+        int uniBidsPartitions, 
+        int uniAuctionsPartitions, 
+        int uniPersonsPartitions,
+        boolean skew) {
+
+        super(kafkaServer, epochDurationMs, enablePersonTopic, enableAuctionTopic, enableBidTopic, uniBidsPartitions, uniAuctionsPartitions, uniPersonsPartitions, skew);
         this.parallelism = parallelism;
         this.parallelismIndex = parallelismIndex;
 
         this.currentIterationNumber = 0;
         this.stoppedIterationNumber = 0;
+
     }
 
     /**

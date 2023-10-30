@@ -4,7 +4,7 @@ import time
 
 import uvloop
 from universalis.common.stateflow_ingress import IngressTypes
-from universalis.nexmark.setup import setup
+from universalis.nexmark.config import config
 from universalis.universalis import Universalis
 
 from operators.auctions_source import auctions_source_operator
@@ -19,7 +19,7 @@ KAFKA_URL = 'localhost:9093'
 
 
 async def main():
-    args = setup()
+    args = config()
     universalis = Universalis(UNIVERSALIS_HOST, UNIVERSALIS_PORT,
                               ingress_type=IngressTypes.KAFKA,
                               kafka_url=KAFKA_URL)
