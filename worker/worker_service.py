@@ -113,6 +113,7 @@ class Worker(object):
         # if not self.snapshot_event.is_set():
         #     logging.warning(f'☠☠☠ Running function: {payload.params[0]} while snapshotting ☠☠☠')
 
+
         if (self.performing_recovery or payload.recovery_cycle != self.networking.recovery_cycle) and not replayed:
             # logging.warning(f'☠☠☠ Running function: {payload.params[0]} while recovering ☠☠☠')
             # logging.warning(f'☠☠☠ Running function: {payload.params[0]} from a different recovery cycle: '
@@ -266,7 +267,7 @@ class Worker(object):
                                  snapshot_name,
                                  snapshot_data,
                                  self.networking.encode_message,
-                                 coordinator_info).add_done_callback(self.update_network_sizes)
+                                 coordinator_info)  # .add_done_callback(self.update_network_sizes)
             snapshot_end = time.time_ns() // 1000000
             if snapshot_end - snapshot_start > 1000:
                 logging.warning(f'Operator: {operator}, Total time: {snapshot_end - snapshot_start}')
@@ -379,7 +380,8 @@ class Worker(object):
                 if messages:
                     # logging.warning('Processing kafka messages')
                     await asyncio.gather(*[self.handle_message_from_kafka(message) for message in messages])
-            # await asyncio.sleep(0.01)
+            if self.checkpoint_protocol == "NOC":
+                await asyncio.sleep(0.025)
 
     async def handle_message_from_kafka(self, msg):
         logging.info(
@@ -506,6 +508,7 @@ class Worker(object):
                         logging.info('CALLED RUN FUN FROM PEER')
                         if self.checkpoint_protocol == 'CIC':
                             # CHANGE TO CIC OBJECT
+                            await self.snapshot_event.wait()
                             cycle_detected, cic_clock = self.checkpointing.cic_cycle_detection(
                                 operator_name, message['__CIC_DETAILS__'])
                             if cycle_detected:
@@ -513,7 +516,8 @@ class Worker(object):
                                                 f' Taking forced checkpoint.')
                                 # await self.networking.update_cic_checkpoint(oper_name)
                                 self.snapshot_event.clear()
-                                await self.take_snapshot(pool, message['__OP_NAME__'], cic_clock=cic_clock)
+                                sn_time = time.time_ns() // 1_000_000
+                                await self.take_snapshot(pool, message['__OP_NAME__'], cic_clock=cic_clock, sn_time=sn_time)
                                 self.snapshot_event.set()
                         payload = self.unpack_run_payload(message, request_id)
                         replayed: bool = True if '__REPLAYED__' in message else False
@@ -788,19 +792,19 @@ class Worker(object):
     async def cic_per_operator(self, pool, checkpoint_interval, operator):
         while True:
             interval_randomness = random.randint(checkpoint_interval - 1, checkpoint_interval + 1)
-            current_time = time.time_ns() // 1_000_000
+            sn_time = time.time_ns() // 1_000_000
             last_snapshot_timestamp = self.checkpointing.get_last_snapshot_timestamp(operator)
             if not self.performing_recovery and self.can_start_checkpointing:
-                if current_time > last_snapshot_timestamp + (interval_randomness * 1000):
+                if sn_time > last_snapshot_timestamp + (interval_randomness * 1000):
                     self.checkpointing.update_cic_checkpoint(operator)
                     cic_clock = self.checkpointing.get_cic_logical_clock(operator)
                     self.snapshot_event.clear()
-                    await self.take_snapshot(pool, operator, cic_clock=cic_clock)
+                    await self.take_snapshot(pool, operator, cic_clock=cic_clock, sn_time=sn_time)
                     self.snapshot_event.set()
                     await asyncio.sleep(interval_randomness)
                 else:
                     await asyncio.sleep(
-                        ceil(((last_snapshot_timestamp + (checkpoint_interval * 1000)) - current_time) / 1000)
+                        ceil(((last_snapshot_timestamp + (checkpoint_interval * 1000)) - sn_time) / 1000)
                     )
             else:
                 await asyncio.sleep(interval_randomness)

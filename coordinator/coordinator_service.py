@@ -96,7 +96,8 @@ class CoordinatorService(object):
                     for partition_two in self.partitions_to_ids[operator_two].keys():
                         channel_name = (f'{operator_one}_{operator_two}_'
                                         f'{int(partition_one) * len(self.partitions_to_ids[operator_two].keys()) + int(partition_two)}')
-                        self.messages_received_intervals[str(self.partitions_to_ids[operator_two][partition_two])][operator_two][channel_name] = [(0,0)]
+                        self.messages_received_intervals[str(self.partitions_to_ids[operator_two][partition_two])][
+                            operator_two][channel_name] = [(0, 0)]
 
     def create_task(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -144,7 +145,7 @@ class CoordinatorService(object):
             logging.warning(f'Node was not found in: {self.recovery_graph}')
         reachable_set = self.recovery_graph[node]
         for next_node in self.recovery_graph[node]:
-            reachable_set = reachable_set.union(self.find_reachable_nodes(next_node, max_steps-1))
+            reachable_set = reachable_set.union(self.find_reachable_nodes(next_node, max_steps - 1))
         return reachable_set
 
     async def send_restore_message(self):
@@ -168,6 +169,8 @@ class CoordinatorService(object):
                 to_replay[worker_id][op_name] = (int(self.recovery_graph_root_set[worker_id][op_name]), {})
         for worker_id in self.recovery_graph_root_set.keys():
             for op_name in self.recovery_graph_root_set[worker_id].keys():
+                if int(self.recovery_graph_root_set[worker_id][op_name]) == 0:
+                    continue
                 to_replay_for_snapshot = self.messages_to_replay[worker_id][op_name][int(
                     self.recovery_graph_root_set[worker_id][op_name])]
                 for channel in to_replay_for_snapshot.keys():
@@ -211,8 +214,11 @@ class CoordinatorService(object):
                 # Set for every worker_id a new list of timestamps containing only the root set timestamp
                 self.snapshot_timestamps[worker_id][op_name] = [root_set[worker_id][op_name]]
                 # Keep only the messages to replay for the root set
-                new_messages_to_replay[worker_id][op_name] = {root_set[worker_id][op_name]:
-                                                                  self.messages_to_replay[worker_id][op_name][root_set[worker_id][op_name]]}
+                if root_set[worker_id][op_name] == 0:
+                    continue
+                new_messages_to_replay[worker_id][op_name] = \
+                    {root_set[worker_id][op_name]: self.messages_to_replay[worker_id][op_name][
+                                                                            root_set[worker_id][op_name]]}
                 # Remove all unnecessary info from the received and sent intervals
                 new_messages_received_intervals[worker_id][op_name] = {}
                 new_messages_sent_intervals[worker_id][op_name] = {}
@@ -576,7 +582,7 @@ class CoordinatorService(object):
 
     async def start_tcp_service(self):
         self.puller_task = asyncio.create_task(self.start_puller())
-        self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{int(SERVER_PORT)+1}")
+        self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{int(SERVER_PORT) + 1}")
         logging.info(f"Coordinator Server listening at 0.0.0.0:{SERVER_PORT} "
                      f"IP:{self.networking.host_name}")
         while True:

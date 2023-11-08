@@ -126,7 +126,7 @@ class NetworkingManager(object):
         # Create the log files and populate the log_file_descriptors and log_file_offsets
 
         self.registered_ops = registered_operators
-        
+
         worker_log_path = os.path.join(UNC_LOG_PATH, f'worker-{self.id}-logs')
         if os.path.exists(worker_log_path):
             shutil.rmtree(worker_log_path)
@@ -302,7 +302,7 @@ class NetworkingManager(object):
                     #                                                       ['__CIC_DETAILS__']).__sizeof__()
             new_msg = self.encode_message(msg, serializer)
             # self.total_network_size += new_msg.__sizeof__()
-            socket_conn.write((new_msg, ))
+            socket_conn.write((new_msg,))
         elif msg['__COM_TYPE__'] == 'SNAPSHOT_TAKEN':
             new_msg = self.encode_message(msg, serializer)
             # self.total_network_size += new_msg.__sizeof__()
@@ -310,16 +310,16 @@ class NetworkingManager(object):
             # logging.warning(f"snapshot_taken size:{size}")
             # self.additional_uncoordinated_size += size
             # self.additional_cic_size += size
-            socket_conn.write((new_msg, ))
+            socket_conn.write((new_msg,))
         elif msg['__COM_TYPE__'] in ['COORDINATED_MARKER', 'COORDINATED_ROUND_DONE', 'TAKE_COORDINATED_CHECKPOINT']:
             new_msg = self.encode_message(msg, serializer)
             # self.total_network_size += new_msg.__sizeof__()
             # self.additional_coordinated_size += new_msg.__sizeof__()
-            socket_conn.write((new_msg, ))
+            socket_conn.write((new_msg,))
         else:
             new_msg = self.encode_message(msg, serializer)
             # self.total_network_size += new_msg.__sizeof__()
-            socket_conn.write((new_msg, ))
+            socket_conn.write((new_msg,))
 
     async def replay_message(self,
                              host,
@@ -333,20 +333,20 @@ class NetworkingManager(object):
             socket_conn = self.pools[(host, port)].get_next_push_conn()
         msg['__MSG__']['__CIC_DETAILS__'] = {}
         if self.checkpoint_protocol == 'CIC':
-            msg['__MSG__']['__CIC_DETAILS__'] = await self.checkpointing.get_message_details(host,
-                                                                                             port,
-                                                                                             msg['__MSG__']
-                                                                                             ['__SENT_FROM__']
-                                                                                             ['operator_name'],
-                                                                                             msg['__MSG__']
-                                                                                             ['__OP_NAME__'])
+            msg['__MSG__']['__CIC_DETAILS__'] = self.checkpointing.get_message_details(host,
+                                                                                       port,
+                                                                                       msg['__MSG__']
+                                                                                       ['__SENT_FROM__']
+                                                                                       ['operator_name'],
+                                                                                       msg['__MSG__']
+                                                                                       ['__OP_NAME__'])
         msg = self.encode_message(msg, serializer)
         # if self.checkpoint_protocol == 'CIC':
         #     self.additional_cic_size += msg.__sizeof__()
         # elif self.checkpoint_protocol == 'UNC':
         #     self.additional_uncoordinated_size += msg.__sizeof__()
         # self.total_network_size += msg.__sizeof__()
-        socket_conn.write((msg, ))
+        socket_conn.write((msg,))
 
     async def __receive_message(self, sock):
         # To be used only by the request response because the lock is needed
@@ -370,7 +370,7 @@ class NetworkingManager(object):
 
     async def __send_message_given_sock(self, sock, msg, serializer):
         msg = self.encode_message(msg, serializer)
-        sock.write((msg, ))
+        sock.write((msg,))
 
     @staticmethod
     def encode_message(msg: object, serializer: Serializer) -> bytes | None:

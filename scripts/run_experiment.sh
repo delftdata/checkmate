@@ -24,4 +24,5 @@ python ./nexmark_queries/"$query"/kafka_input_consumer.py "$saving_dir" "$experi
 python ./nexmark_queries/"$query"/kafka_output_consumer.py "$saving_dir" "$experiment"
 python ./nexmark_queries/"$query"/metrics/calculate_latency.py "$saving_dir" "$experiment"
 python ./nexmark_queries/"$query"/metrics/get_99_percentile.py "$saving_dir" "$experiment"
+python ./nexmark_queries/"$query"/metrics/get_99_percentile_output.py "$saving_dir" "$experiment"
 ./scripts/delete_deployment.sh "$experiment" "$saving_dir"

@@ -12,6 +12,7 @@ saving_dir = sys.argv[1]
 protocol_names = ["NOC", "UNC", "COR", "CIC"]
 # queries = ["q1", "q3", "q8r", "q12r"]
 queries = ["q3", "q8r", "q12r"]
+
 # query_names = ["Q1", "Q3", "Q8", "Q12"]
 query_names = ["Q3", "Q8", "Q12"]
 
@@ -29,33 +30,19 @@ query_names = ["Q3", "Q8", "Q12"]
 #     "q12r": ["NOC-q12-30w-5si-36000r-1f", "UNC-q12-30w-5si-36000r-1f", "COR-q12-30w-5si-36000r-1f", "CIC-q12-30w-5si-36000r-1f"]
 # }
 
-# query_settings = {
-#     "q1": ["NOC-q1-50w-5si-60000r-1f", "UNC-q1-50w-5si-60000r-1f", "COR-q1-50w-5si-60000r-1f", "CIC-q1-50w-5si-60000r-1f"],
-#     "q3": ["NOC-q3-50w-5si-60000r-1f", "UNC-q3-50w-5si-60000r-1f", "COR-q3-50w-5si-60000r-1f", "CIC-q3-50w-5si-60000r-1f"],
-#     "q8r": ["NOC-q8-50w-5si-60000r-1f", "UNC-q8-50w-5si-60000r-1f", "COR-q8-50w-5si-60000r-1f", "CIC-q8-50w-5si-60000r-1f"],
-#     "q12r": ["NOC-q12-50w-5si-60000r-1f", "UNC-q12-50w-5si-60000r-1f", "COR-q12-50w-5si-60000r-1f", "CIC-q12-50w-5si-60000r-1f"]
-# }
-
-# query_settings = {
-#     "q1": ["NOC-q1-50w-5si-60000r-1f", "UNC-q1-50w-5si-60000r-1f", "COR-q1-50w-5si-60000r-1f", "CIC-q1-50w-5si-60000r-1f"],
-#     "q3": ["NOC-q3-50w-5si-60000r-1f", "UNC-q3-50w-5si-60000r-1f", "COR-q3-50w-5si-60000r-1f", "CIC-q3-50w-5si-60000r-1f"],
-#     "q8r": ["NOC-q8-50w-5si-60000r-1f", "UNC-q8-50w-5si-60000r-1f", "COR-q8-50w-5si-60000r-1f", "CIC-q8-50w-5si-60000r-1f"],
-#     "q12r": ["NOC-q12-50w-5si-60000r-1f", "UNC-q12-50w-5si-60000r-1f", "COR-q12-50w-5si-60000r-1f", "CIC-q12-50w-5si-60000r-1f"]
-# }
-
 query_settings = {
     "q3": ["NOC-q3-10w-5si-4500r-nf-skew", "UNC-q3-10w-5si-4500r-nf-skew", "COR-q3-10w-5si-4500r-nf-skew", "CIC-q3-10w-5si-4500r-nf-skew"],
     "q8r": ["NOC-q8-10w-5si-4500r-nf-skew", "UNC-q8-10w-5si-4500r-nf-skew", "COR-q8-10w-5si-4500r-nf-skew", "CIC-q8-10w-5si-4500r-nf-skew"],
     "q12r": ["NOC-q12-10w-5si-4500r-nf-skew", "UNC-q12-10w-5si-4500r-nf-skew", "COR-q12-10w-5si-4500r-nf-skew", "CIC-q12-10w-5si-4500r-nf-skew"]
 }
 
-fig, ax = plt.subplots(1, 3, figsize=(25, 5))
+fig, ax = plt.subplots(1,3, figsize=(25,5))
 
-for idx, q in enumerate(queries):
-    # fp_1 = open(f"{saving_dir}/{query_settings[q][0]}/{query_settings[q][0]}-99p.csv", "r")
-    fp_2 = open(f"{saving_dir}/{query_settings[q][1]}/{query_settings[q][1]}-99p.csv", "r")
-    fp_3 = open(f"{saving_dir}/{query_settings[q][2]}/{query_settings[q][2]}-99p.csv", "r")
-    fp_4 = open(f"{saving_dir}/{query_settings[q][3]}/{query_settings[q][3]}-99p.csv", "r")
+for idx, q in enumerate(queries): 
+    # fp_1 = open(f"{saving_dir}/{query_settings[q][0]}/{query_settings[q][0]}-99p-output.csv", "r")
+    fp_2 = open(f"{saving_dir}/{query_settings[q][1]}/{query_settings[q][1]}-99p-output.csv", "r")
+    fp_3 = open(f"{saving_dir}/{query_settings[q][2]}/{query_settings[q][2]}-99p-output.csv", "r")
+    fp_4 = open(f"{saving_dir}/{query_settings[q][3]}/{query_settings[q][3]}-99p-output.csv", "r")
 
     # p99_1 = json.load(fp_1)
     p99_2 = json.load(fp_2)
@@ -95,4 +82,4 @@ fig.legend(handles, labels, bbox_to_anchor=(0.5, 0), loc="center", ncol=4)
 fig.tight_layout()
 # plt.show()
 
-fig.savefig(f'{saving_dir}/{query_settings["q3"][0]}/figures/combined-all-99th.pdf', bbox_inches='tight')
+fig.savefig(f'{saving_dir}/{query_settings["q3"][0]}/figures/combined-all-99th-output.pdf', bbox_inches='tight')
