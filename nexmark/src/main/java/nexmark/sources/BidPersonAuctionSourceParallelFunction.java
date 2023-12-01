@@ -40,7 +40,7 @@ public class BidPersonAuctionSourceParallelFunction extends BidPersonAuctionSour
         int uniBidsPartitions, 
         int uniAuctionsPartitions, 
         int uniPersonsPartitions,
-        boolean skew) {
+        double skew) {
 
         super(kafkaServer, epochDurationMs, enablePersonTopic, enableAuctionTopic, enableBidTopic, uniBidsPartitions, uniAuctionsPartitions, uniPersonsPartitions, skew);
         this.parallelism = parallelism;

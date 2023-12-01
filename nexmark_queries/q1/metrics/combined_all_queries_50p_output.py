@@ -41,14 +41,20 @@ query_settings = {
     "q8r": ["NOC-q8-50w-5si-72000r-1f", "UNC-q8-50w-5si-63200r-1f", "COR-q8-50w-5si-72000r-1f", "CIC-q8-50w-5si-36800r-1f"],
     "q12r": ["NOC-q12-50w-5si-72000r-1f", "UNC-q12-50w-5si-66400r-1f", "COR-q12-50w-5si-72000r-1f", "CIC-q12-50w-5si-33600r-1f"]
 }
+# query_settings = {
+#     "q3": ["NOC-q3-10w-5si-24000r-nf-skew-80mst", "UNC-q3-10w-5si-20000r-nf-skew-80mst", "COR-q3-10w-5si-21600r-nf-skew-80mst", "CIC-q3-10w-5si-12000r-nf-skew-80mst"],
+#     "q8r": ["NOC-q8-10w-5si-18400r-nf-skew-80mst", "UNC-q8-10w-5si-16800r-nf-skew-80mst", "COR-q8-10w-5si-18400r-nf-skew-80mst", "CIC-q8-10w-5si-12800r-nf-skew-80mst"],
+#     "q12r": ["NOC-q12-10w-5si-16800r-nf-skew-80mst", "UNC-q12-10w-5si-15200r-nf-skew-80mst", "COR-q12-10w-5si-16800r-nf-skew-80mst", "CIC-q12-10w-5si-12000r-nf-skew-80mst"]
+# }
+
 
 fig, ax = plt.subplots(1,4, figsize=(25,4))
 
 for idx, q in enumerate(queries): 
-    fp_1 = open(f"{saving_dir}/{query_settings[q][0]}/{query_settings[q][0]}-99p-output.csv", "r")
-    fp_2 = open(f"{saving_dir}/{query_settings[q][1]}/{query_settings[q][1]}-99p-output.csv", "r")
-    fp_3 = open(f"{saving_dir}/{query_settings[q][2]}/{query_settings[q][2]}-99p-output.csv", "r")
-    fp_4 = open(f"{saving_dir}/{query_settings[q][3]}/{query_settings[q][3]}-99p-output.csv", "r")
+    fp_1 = open(f"{saving_dir}/{query_settings[q][0]}/{query_settings[q][0]}-50p-output.csv", "r")
+    fp_2 = open(f"{saving_dir}/{query_settings[q][1]}/{query_settings[q][1]}-50p-output.csv", "r")
+    fp_3 = open(f"{saving_dir}/{query_settings[q][2]}/{query_settings[q][2]}-50p-output.csv", "r")
+    fp_4 = open(f"{saving_dir}/{query_settings[q][3]}/{query_settings[q][3]}-50p-output.csv", "r")
 
     p99_1 = json.load(fp_1)
     p99_2 = json.load(fp_2)
@@ -72,18 +78,17 @@ for idx, q in enumerate(queries):
         p99_4 = {int(k)/100: v for k, v in p99_4.items()}
 
     experiment_length = 60  # in seconds
-    ax[idx].set_yscale("log")
+    ax[idx].set_yscale('log')
     ax[idx].axvline(x=18, color="black", linestyle='--', linewidth=3)
-    ax[idx].plot(p99_1.keys(), p99_1.values(), linewidth=2, linestyle="--", marker="o", markevery=(0.1,0.1), markersize=4, color=noc_color, label="No checkpoints")
-    ax[idx].plot(p99_2.keys(), p99_2.values(), linewidth=2, linestyle="-.", marker="v", markevery=(0.1,0.1), markersize=4, color=unc_color, label="Uncoordinated")
-    ax[idx].plot(p99_3.keys(), p99_3.values(), linewidth=2, linestyle="-", marker="s", markevery=(0.1,0.1), markersize=4, color=cor_color, label="Coordinated")
-    ax[idx].plot(p99_4.keys(), p99_4.values(), linewidth=2, linestyle=":", marker="D", markevery=(0.1,0.1), markersize=4, color=cic_color, label="Communication-induced")
+    ax[idx].plot(p99_1.keys(), p99_1.values(), linewidth=2, linestyle="--", marker="o", markersize=4, markevery=(0.1, 0.1), color=noc_color, label="No checkpoints")
+    ax[idx].plot(p99_2.keys(), p99_2.values(), linewidth=2, linestyle="-.", marker="v", markersize=4, markevery=(0.1, 0.1), color=unc_color, label="Uncoordinated")
+    ax[idx].plot(p99_3.keys(), p99_3.values(), linewidth=2, linestyle="-", marker="s", markersize=4, markevery=(0.1, 0.1), color=cor_color, label="Coordinated")
+    ax[idx].plot(p99_4.keys(), p99_4.values(), linewidth=2, linestyle=":", marker="D", markersize=4, markevery=(0.1, 0.1), color=cic_color, label="Communication-induced")
 
     ax[idx].set_xlabel('Time (s)', fontweight="bold")
     ax[idx].set_ylabel('Latency (ms)', fontweight="bold")
     ax[idx].set_xticks([10, 20, 30, 40, 50, 60])
     ax[idx].set_xlim(0, 60)
-
 
     # if idx == 1:
     #     # handles, labels = plt.gca().get_legend_handles_labels()
@@ -96,4 +101,4 @@ fig.legend(handles, labels, bbox_to_anchor=(0.5, 0), loc="center", ncols=4)
 fig.tight_layout()
 # plt.show()
 
-fig.savefig(f'{saving_dir}/{query_settings["q1"][0]}/figures/combined-all-99th-output.pdf', bbox_inches='tight')
+fig.savefig(f'{saving_dir}/{query_settings["q1"][0]}/figures/combined-all-50th-output.pdf', bbox_inches='tight')

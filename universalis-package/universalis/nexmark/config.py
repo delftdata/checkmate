@@ -26,7 +26,7 @@ def config():
                             action="store")
     arg_parser.add_argument("-s", "--skew",
                             help="Turn on skew.",
-                            default="false",
+                            default="0",
                             type=str,
                             action="store")
     arguments = arg_parser.parse_args()

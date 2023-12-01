@@ -45,8 +45,8 @@ for idx, t in enumerate(joined_sorted_out['timestamp_y']):
             latency_buckets[i]['items'].append(joined_sorted_out['timestamp_y'][idx] - joined_sorted_out['timestamp_x'][idx])
             break
 
-latency_buckets_99: dict[int, float] = {k: np.percentile(v['items'], 99) for k, v in latency_buckets.items() if v['items'] != []}
+latency_buckets_99: dict[int, float] = {k: np.percentile(v['items'], 50) for k, v in latency_buckets.items() if v['items'] != []}
 # latency_buckets_50: dict[int, float] = {k*100: np.percentile(v['items'], 50) for k, v in latency_buckets.items() if v['items'] != []}
 
-with open(f"{saving_dir}/{experiment_name}/{experiment_name}-99p-output.csv", "w") as fp:
+with open(f"{saving_dir}/{experiment_name}/{experiment_name}-50p-output.csv", "w") as fp:
     json.dump(latency_buckets_99, fp, indent=4)

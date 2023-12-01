@@ -34,7 +34,7 @@ public class BidPersonAuctionSourceParallelManager {
                                                  int uniBidsPartitions,
                                                  int uniAuctionsPartitions,
                                                  int uniPersonsPartitions,
-                                                 boolean skew) {
+                                                 double skew) {
         this.parallelism = parallelism;
         this.epochDurationMs = epochDurationMs;
         this.sourceFunctions = new ArrayList<>();

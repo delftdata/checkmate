@@ -17,6 +17,7 @@ responded = joined.dropna().sort_values('timestamp_x').reset_index(drop=True)
 responded = responded[responded['timestamp_x'] > (30000 + responded['timestamp_x'][0])].reset_index(drop=True)
 
 responded = responded.sort_values('timestamp_y').reset_index(drop=True)
+
 start_time = -math.inf
 
 latency_buckets = {}
@@ -40,8 +41,8 @@ for idx, t in enumerate(responded['timestamp_y']):
 
 # print(latency_buckets)
 
-latency_buckets_99: dict[int, float] = {k*100: np.percentile(v['items'], 99) for k, v in latency_buckets.items() if v['items'] != []}
+latency_buckets_99: dict[int, float] = {k*100: np.percentile(v['items'], 50) for k, v in latency_buckets.items() if v['items'] != []}
 # latency_buckets_50: dict[int, float] = {k*100: np.percentile(v['items'], 50) for k, v in latency_buckets.items() if v['items'] != []}
 
-with open(f"{saving_dir}/{experiment_name}/{experiment_name}-99p-output.csv", "w") as fp:
+with open(f"{saving_dir}/{experiment_name}/{experiment_name}-50p-output.csv", "w") as fp:
     json.dump(latency_buckets_99, fp, indent=4)

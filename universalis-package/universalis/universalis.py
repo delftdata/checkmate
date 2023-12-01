@@ -105,7 +105,8 @@ class Universalis:
                                operator: BaseOperator,
                                key,
                                function: Type | str,
-                               params: tuple = tuple()):
+                               params: tuple = tuple(),
+                               serializer: Serializer = Serializer.MSGPACK):
         partition: int = make_key_hashable(key) % operator.n_partitions
         fun_name: str = function if isinstance(function, str) else function.__name__
         event = {'__OP_NAME__': operator.name,
@@ -114,18 +115,38 @@ class Universalis:
                  '__PARAMS__': params,
                  '__PARTITION__': partition}
         request_id = uuid.uuid4().int >> 64
+        serialized_value = self.networking_manager.encode_message({"__COM_TYPE__": 'RUN_FUN', "__MSG__": event},
+                                                                  serializer=serializer)
         msg = await self.kafka_producer.send_and_wait(operator.name,
                                                       key=request_id,
-                                                      value=event,
+                                                      value=serialized_value,
                                                       partition=partition)
         return request_id, msg.timestamp
+
+    async def broadcast_kafka_event(self,
+                                    operator: BaseOperator,
+                                    function: Type | str,
+                                    n_partitions: int,
+                                    params: tuple = tuple(),
+                                    serializer: Serializer = Serializer.MSGPACK):
+        fun_name: str = function if isinstance(function, str) else function.__name__
+        for partition in range(n_partitions):
+            event = {'__OP_NAME__': operator.name,
+                     '__KEY__': None,
+                     '__FUN_NAME__': fun_name,
+                     '__PARAMS__': params,
+                     '__PARTITION__': partition}
+            request_id = uuid.uuid4().int >> 64
+            serialized_value = self.networking_manager.encode_message({"__COM_TYPE__": 'RUN_FUN', "__MSG__": event},
+                                                                      serializer=serializer)
+            await self.kafka_producer.send_and_wait(operator.name,
+                                                    key=request_id,
+                                                    value=serialized_value,
+                                                    partition=partition)
 
     async def start_kafka_producer(self):
         self.kafka_producer = AIOKafkaProducer(bootstrap_servers=[self.kafka_url],
                                                key_serializer=msgpack_serialization,
-                                               value_serializer=lambda event: self.networking_manager.encode_message(
-                                                   {"__COM_TYPE__": 'RUN_FUN', "__MSG__": event},
-                                                   serializer=Serializer.MSGPACK),
                                                enable_idempotence=True)
         while True:
             try:
@@ -142,7 +163,7 @@ class Universalis:
                                                    self.coordinator_port,
                                                    {"__COM_TYPE__": 'SEND_EXECUTION_GRAPH',
                                                     "__MSG__": stateflow_graph})
-        
+
     async def send_channel_list(self, list_of_channels: list[tuple[str, str, bool]]):
         await self.networking_manager.send_message(self.coordinator_adr,
                                                    self.coordinator_port,

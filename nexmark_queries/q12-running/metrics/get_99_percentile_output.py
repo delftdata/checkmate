@@ -25,11 +25,11 @@ start_time = -math.inf
 latency_buckets = {}
 bucket_id = -1
 
-granularity = 100  # 1 second (ms) (i.e. bucket size)
+granularity = 1000  # 1 second (ms) (i.e. bucket size)
 print(joined_sorted['timestamp_y'].iloc[-1])
 print(joined_sorted['timestamp_y'].iloc[0])
 print(joined_sorted['timestamp_y'].iloc[-1] - joined_sorted['timestamp_y'].iloc[0])
-num_of_buckets = int((joined_sorted['timestamp_y'].iloc[-1] - joined_sorted['timestamp_y'].iloc[0])/granularity) + 1
+num_of_buckets = int((joined_sorted['timestamp_y'].iloc[-1] - joined_sorted['timestamp_y'].iloc[0])/granularity) + 10
 print(num_of_buckets)
 for i in range(num_of_buckets):
     latency_buckets[i] = {}

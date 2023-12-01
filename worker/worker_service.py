@@ -103,6 +103,13 @@ class Worker(object):
         # operator_name: Event that blocks the channel
         self.cor_channel_block_on_marker: dict[str, dict[str, asyncio.Event]] = {}
 
+        # backpressure queue
+        self.backpressure_queue = asyncio.Queue(maxsize=1000)
+        self.buffer_runner_task: asyncio.Task = ...
+        self.max_concurrency = 1000
+        # self.concurrency_limiter: asyncio.Semaphore = asyncio.Semaphore(self.max_concurrency)
+        self.concurrency_condition: asyncio.Condition = asyncio.Condition()
+
     async def run_function(
             self,
             payload: RunFuncPayload,
@@ -112,7 +119,6 @@ class Worker(object):
         # logging.warning(f"run_function -> snapshot_event: {self.snapshot_event.is_set()}")
         # if not self.snapshot_event.is_set():
         #     logging.warning(f'☠☠☠ Running function: {payload.params[0]} while snapshotting ☠☠☠')
-
 
         if (self.performing_recovery or payload.recovery_cycle != self.networking.recovery_cycle) and not replayed:
             # logging.warning(f'☠☠☠ Running function: {payload.params[0]} while recovering ☠☠☠')
@@ -166,6 +172,8 @@ class Worker(object):
                 partition=self.id - 1
             ))
 
+        # async with self.concurrency_condition:
+        #     self.concurrency_condition.notify()
         return success
 
     @staticmethod
@@ -357,6 +365,8 @@ class Worker(object):
             t.cancel()
             try:
                 await t
+                async with self.concurrency_condition:
+                    self.concurrency_condition.notify_all()
             except asyncio.CancelledError:
                 pass
         logging.warning("All function are canceled.")
@@ -377,11 +387,26 @@ class Worker(object):
         while True:
             result = await consumer.getmany(timeout_ms=1)
             for _, messages in result.items():
-                if messages:
-                    # logging.warning('Processing kafka messages')
-                    await asyncio.gather(*[self.handle_message_from_kafka(message) for message in messages])
-            if self.checkpoint_protocol == "NOC":
-                await asyncio.sleep(0.025)
+                # logging.warning('Processing kafka messages')
+                for message in messages:
+                    # logging.warning(f"len of function_tasks: {len(self.function_tasks)}")
+                    if len(self.function_tasks) < self.max_concurrency:
+                        # await self.backpressure_queue.put(message)
+                        await self.handle_message_from_kafka(message)
+                    else:
+                        async with self.concurrency_condition:
+                            await self.concurrency_condition.wait_for(
+                                lambda: len(self.function_tasks) < self.max_concurrency)
+                            await self.handle_message_from_kafka(message)
+                            # await self.backpressure_queue.put(message)
+                # await asyncio.gather(*[self.handle_message_from_kafka(message) for message in messages])
+            # if self.checkpoint_protocol == "NOC":
+            #     await asyncio.sleep(0.025)
+
+    async def buffer_consumer(self):
+        while True:
+            message = await self.backpressure_queue.get()
+            await self.handle_message_from_kafka(message)
 
     async def handle_message_from_kafka(self, msg):
         logging.info(
@@ -415,8 +440,8 @@ class Worker(object):
                         run_func_payload
                     )
                 )
-
             else:
+                # async with self.concurrency_limiter:
                 self.create_run_function_task(
                     self.run_function(
                         run_func_payload
@@ -443,7 +468,14 @@ class Worker(object):
     def create_run_function_task(self, coroutine):
         task = asyncio.create_task(coroutine)
         self.function_tasks.add(task)
-        task.add_done_callback(self.function_tasks.discard)
+        asyncio.create_task(self.discard_and_notify(task))
+        # task.add_done_callback(await self.discard_and_notify)
+
+    async def discard_and_notify(self, task: asyncio.Task):
+        await task
+        self.function_tasks.discard(task)
+        async with self.concurrency_condition:
+            self.concurrency_condition.notify_all()
 
     async def checkpoint_coordinated_sources(self, pool, sources, _round):
         for source in sources:
@@ -500,6 +532,7 @@ class Worker(object):
                         await self.cor_channel_block_on_marker[operator_name][marker_event_id].wait()
 
                         payload = self.unpack_run_payload(message, request_id)
+                        # async with self.concurrency_limiter:
                         self.create_run_function_task(
                             self.run_function(
                                 payload, send_from=sender_details)
@@ -521,6 +554,7 @@ class Worker(object):
                                 self.snapshot_event.set()
                         payload = self.unpack_run_payload(message, request_id)
                         replayed: bool = True if '__REPLAYED__' in message else False
+                        # async with self.concurrency_limiter:
                         self.create_run_function_task(
                             self.run_function(
                                 payload, send_from=sender_details, replayed=replayed
@@ -530,6 +564,7 @@ class Worker(object):
                     logging.info('CALLED RUN FUN RQ RS FROM PEER')
                     payload = self.unpack_run_payload(message, request_id, response_socket=resp_adr)
                     await self.snapshot_event.wait()
+                    # async with self.concurrency_limiter:
                     self.create_run_function_task(
                         self.run_function(
                             payload
@@ -812,6 +847,7 @@ class Worker(object):
     async def start_tcp_service(self):
         with concurrent.futures.ProcessPoolExecutor(1) as pool:
             self.puller_task = asyncio.create_task(self.start_puller(pool))
+            # self.buffer_runner_task = asyncio.create_task(self.buffer_consumer())
             self.router = await aiozmq.create_zmq_stream(zmq.ROUTER, bind=f"tcp://0.0.0.0:{int(SERVER_PORT) + 1}",
                                                          high_read=0, high_write=0)
             self.kafka_egress_producer_pool = KafkaProducerPool(self.id, KAFKA_URL, size=100)
