@@ -1,5 +1,5 @@
 # CheckMate
-CheckMate: Evaluating Checkpointing Protocols for Streaming Dataflows
+This repository contains the code of the paper "CheckMate: Evaluating Checkpointing Protocols for Streaming Dataflows", ICDE 2024.
 
 ## Preliminaries
 
@@ -53,6 +53,9 @@ Using either the provided or your own csv files, you can run the experiments usi
 of the repository:  
 `./scripts/run_batch_experiments.sh location_of_the_csv_file directory_to_save_results`
 
+<ins>Note</ins>: To run experiments with NexMark queries, you must first build the generator. 
+To build the generator, run `mvn clean package` from nexmark directory. Java 11 and maven are required. 
+
 
 ## Alternative way of execution
 
@@ -69,9 +72,9 @@ To clear kafka: `docker compose -f docker-compose-kafka.yml down --volumes`
 
 ### MinIO
 
-To run MinIO: `docker-compose up -f docker-compose-simple-minio.yml up`
+To run MinIO: `docker compose up -f docker-compose-simple-minio.yml up`
 
-To clear MinIO: `docker-compose -f docker-compose-simple-minio.yml down --volumes`
+To clear MinIO: `docker compose -f docker-compose-simple-minio.yml down --volumes`
 
 ---
   
@@ -79,7 +82,7 @@ Then, you can start the stream processing engine and specify the desired scale.
 
 ### Stateflow Engine
 
-To run the SPE: `docker-compose up --build --scale worker=4`
+To run the SPE: `docker compose up --build --scale worker=4`
 
-To clear the SPE: `docker-compose down --volumes`
+To clear the SPE: `docker compose down --volumes`
 
