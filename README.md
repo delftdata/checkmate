@@ -72,7 +72,7 @@ To clear kafka: `docker compose -f docker-compose-kafka.yml down --volumes`
 
 ### MinIO
 
-To run MinIO: `docker compose up -f docker-compose-simple-minio.yml up`
+To run MinIO: `docker compose -f docker-compose-simple-minio.yml up`
 
 To clear MinIO: `docker compose -f docker-compose-simple-minio.yml down --volumes`
 
