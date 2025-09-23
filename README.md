@@ -51,7 +51,7 @@ in our experiments will follow.
 
 Using either the provided or your own csv files, you can run the experiments using the following script from the ***root*** 
 of the repository:  
-`./scripts/run_batch_experiments.sh location_of_the_csv_file directory_to_save_results`
+`./scripts/run_batch_exp.sh location_of_the_csv_file directory_to_save_results`
 
 <ins>Note</ins>: To run experiments with NexMark queries, you must first build the generator. 
 To build the generator, run `mvn clean package` from nexmark directory. Java 11 and maven are required. 

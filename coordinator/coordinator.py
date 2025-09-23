@@ -1,9 +1,7 @@
 import os
 import time
 
-from kafka import KafkaAdminClient
-from kafka.admin import NewTopic
-from kafka.errors import NoBrokersAvailable, NodeNotReadyError, TopicAlreadyExistsError
+from confluent_kafka.admin import AdminClient, NewTopic, KafkaException
 
 from universalis.common.stateflow_graph import StateflowGraph
 from universalis.common.stateflow_ingress import IngressTypes
@@ -49,19 +47,22 @@ class Coordinator(object):
             logging.error('Kafka URL not given')
         while True:
             try:
-                client = KafkaAdminClient(bootstrap_servers=kafka_url, request_timeout_ms=300000)
+                client = AdminClient({'bootstrap.servers': kafka_url})
                 break
-            except (NoBrokersAvailable, NodeNotReadyError):
+            except KafkaException:
                 logging.warning(f'Kafka at {kafka_url} not ready yet, sleeping for 1 second')
                 time.sleep(1)
         partitions_per_operator = {}
         topics = []
         for operator in stateflow_graph.nodes.values():
             partitions_per_operator[operator.name] = operator.n_partitions
-            topics.append(NewTopic(name=operator.name, num_partitions=operator.n_partitions, replication_factor=1))
-        topics.append(NewTopic(name='universalis-egress', num_partitions=len(workers), replication_factor=1))
-        try:
-            client.create_topics(topics)
-            logging.warning("Topics created")
-        except TopicAlreadyExistsError:
-            logging.warning('Some of the Kafka topics already exists, job already submitted or rescaling')
+            topics.append(NewTopic(topic=operator.name, num_partitions=operator.n_partitions, replication_factor=1))
+        topics.append(NewTopic(topic='universalis-egress', num_partitions=len(workers), replication_factor=1))
+
+        futures = client.create_topics(topics)
+        for topic, future in futures.items():
+            try:
+                future.result()
+                logging.warning(f"Topic {topic} created")
+            except KafkaException as e:
+                logging.warning(f"Failed to create topic {topic}: {e}")
