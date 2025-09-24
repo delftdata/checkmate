@@ -9,7 +9,7 @@ services:
     ports:
       - "8886:8888"
     environment:
-      - KAFKA_URL=kafka1:9092
+      - KAFKA_URL=kafka1:19092
     env_file:
       - env-example/minio.env
 
@@ -20,7 +20,7 @@ services:
     image: dev/universalis:latest
     environment:
       - INGRESS_TYPE=KAFKA
-      - KAFKA_URL=kafka1:9092
+      - KAFKA_URL=kafka1:19092
       - DISCOVERY_HOST=coordinator
       - DISCOVERY_PORT=8888
       - UNC_LOG_PATH=/usr/local/universalis/unc-logs

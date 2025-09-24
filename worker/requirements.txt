@@ -7,6 +7,6 @@ aiozmq==1.0.0
 # monitoring service
 # psutil==5.9.2
 # Kafka
-aiokafka==0.8.1
+aiokafka==0.12.0
 # snapshots
 minio==7.1.17

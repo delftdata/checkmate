@@ -1,7 +1,6 @@
 import asyncio
 from aiokafka import AIOKafkaProducer
 from aiokafka.errors import KafkaConnectionError
-from kafka import KafkaProducer
 
 from universalis.common.logging import logging
 from universalis.common.kafka_rate_limited_producer import KafkaRateLimitedProducer
@@ -15,7 +14,6 @@ class KafkaProducerPool(object):
         self.size = size
         self.producer_pool: list[AIOKafkaProducer] = []
         self.limited_producer_pool: list[KafkaRateLimitedProducer] = []
-        self.sync_producer_pool: list[KafkaProducer] = []
         self.index = 0
 
     def __iter__(self):
@@ -30,9 +28,6 @@ class KafkaProducerPool(object):
     def pick_producer(self, partition):
         return self.producer_pool[partition % self.size]
 
-    def pick_sync_producer(self, partition) -> KafkaProducer:
-        return self.sync_producer_pool[partition]
-
     def pick_limited_producer(self, partition) -> KafkaRateLimitedProducer:
         return self.limited_producer_pool[partition]
 
@@ -40,11 +35,6 @@ class KafkaProducerPool(object):
         for _ in range(self.size):
             self.producer_pool.append(await self.start_kafka_egress_producer())
         logging.warning("all producers have started")
-
-    def start_sync(self):
-        for _ in range(self.size):
-            self.sync_producer_pool.append(self.start_kafka_sync_producer())
-        logging.warning(len(self.sync_producer_pool))
 
     async def start_limited(self):
         for _ in range(self.size):
@@ -76,8 +66,4 @@ class KafkaProducerPool(object):
             kafka_url=self.kafka_url,
             rate=rate_limit)
         await kafka_producer.start(self.worker_id)
-        return kafka_producer
-
-    def start_kafka_sync_producer(self):
-        kafka_producer = KafkaProducer(bootstrap_servers=self.kafka_url, acks=1)
         return kafka_producer

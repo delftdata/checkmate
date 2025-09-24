@@ -8,7 +8,7 @@ setuptools.setup(
     install_requires=[
         'cloudpickle>=3.0.0,<4.0.0',
         'msgspec>=0.18.4,<1.0.0',
-        'aiokafka>=0.8.1,<1.0',
+        'aiokafka>=0.12.0,<1.0',
     ],
     python_requires='>=3.11',
 )

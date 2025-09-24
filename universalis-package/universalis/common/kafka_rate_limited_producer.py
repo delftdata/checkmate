@@ -1,9 +1,8 @@
 import asyncio
-import os
 
 from aiokafka import AIOKafkaProducer
 from aiokafka.structs import RecordMetadata
-from kafka.errors import KafkaConnectionError
+from aiokafka.errors import KafkaConnectionError
 from universalis.common.logging import logging
 
 

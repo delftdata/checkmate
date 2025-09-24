@@ -7,6 +7,6 @@ aiozmq==1.0.0
 # monitoring service
 # psutil==5.9.1
 # kafka
-kafka-python==2.0.2
+confluent-kafka==2.8.0
 # snapshots
 minio==7.1.17
